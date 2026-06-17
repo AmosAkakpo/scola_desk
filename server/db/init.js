@@ -1,0 +1,81 @@
+const Database = require('better-sqlite3')
+const path = require('path')
+const fs = require('fs')
+
+let db
+
+function getDatabasePath() {
+    const isDev = process.env.NODE_ENV === 'development'
+
+    let base
+
+    if (isDev) {
+        base = path.join(__dirname, '../../data')
+    } else {
+        try {
+            const { app } = require('electron')
+            base = path.join(app.getPath('userData'), 'data')
+        } catch {
+            base = path.join(__dirname, '../../data')
+        }
+    }
+
+    if (!fs.existsSync(base)) {
+        fs.mkdirSync(base, { recursive: true })
+    }
+
+    return path.join(base, 'scolaDesk.db')
+}
+
+function initializeDatabase() {
+    const dbPath = getDatabasePath()
+
+    db = new Database(dbPath)
+
+    db.pragma('journal_mode = WAL')
+    db.pragma('foreign_keys = ON')
+
+    runMigrations()
+
+    console.log('[DB] Initialized at:', dbPath)
+    return db
+}
+
+function runMigrations() {
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      version     TEXT NOT NULL UNIQUE,
+      executed_at TEXT DEFAULT (datetime('now'))
+    )
+  `)
+
+    const migrations = [
+        {
+            version: '001_initial',
+            run: require('./migration/001_initial').migration001
+        }
+    ]
+
+    for (const migration of migrations) {
+        const already = db
+            .prepare('SELECT id FROM schema_migrations WHERE version = ?')
+            .get(migration.version)
+
+        if (!already) {
+            console.log(`[DB] Running migration: ${migration.version}`)
+            migration.run(db)
+            db
+                .prepare('INSERT INTO schema_migrations (version) VALUES (?)')
+                .run(migration.version)
+            console.log(`[DB] Migration complete: ${migration.version}`)
+        }
+    }
+}
+
+function getDb() {
+    if (!db) throw new Error('[DB] Database not initialized. Call initializeDatabase() first.')
+    return db
+}
+
+module.exports = { initializeDatabase, getDb }
