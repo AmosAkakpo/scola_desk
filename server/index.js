@@ -22,6 +22,8 @@ app.get('/api/health', (req, res) => {
 
 // Routes
 app.use('/api/auth', require('./routes/auth'))
+app.use('/api/activation', require('./routes/activation'))
+app.use('/api/onboarding', require('./routes/onboarding'))
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER] ScolaDesk running on port ${PORT}`)

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell } = require('electron')
 const path = require('path')
 const { fork } = require('child_process')
+const { registerHardwareIPC } = require('./ipc/hardware')
 
 const isDev = !app.isPackaged
 
@@ -62,6 +63,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    registerHardwareIPC()
     startExpressServer()
     setTimeout(createWindow, 1500)
 })
