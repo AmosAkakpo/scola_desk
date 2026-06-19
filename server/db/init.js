@@ -54,6 +54,10 @@ function runMigrations() {
         {
             version: '001_initial',
             run: require('./migration/001_initial').migration001
+        },
+        {
+            version: '002_onboarding_fields',
+            run: require('./migration/002_onboarding_fields').migration002
         }
     ]
 

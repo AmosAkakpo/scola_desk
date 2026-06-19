@@ -4,50 +4,66 @@ const axios = require('axios')
 const crypto = require('crypto')
 const { getDb } = require('../db/init')
 
-const CAP_URL = process.env.CAP_API_URL || 'http://localhost:3001'
-const PAYLOAD_SECRET = process.env.LICENSE_PAYLOAD_SECRET || 'scoladesk-v1-secret-change-in-production'
+const CAP_URL = (process.env.CAP_API_URL || 'http://localhost:3001').trim()
+const PAYLOAD_SECRET = (process.env.LICENSE_PAYLOAD_SECRET || 'scoladesk-v1-secret-change-in-production').trim()
 
-function verifyPayload(encoded, signature) {
-  const json = Buffer.from(encoded, 'base64').toString('utf8')
-  const expected = crypto.createHmac('sha256', PAYLOAD_SECRET).update(json).digest('hex')
-  if (expected !== signature) return null
-  return JSON.parse(json)
+function verifySignature(payload) {
+  const copy = { ...payload }
+  delete copy.signature
+  const expected = crypto.createHmac('sha256', PAYLOAD_SECRET).update(JSON.stringify(copy)).digest('hex')
+  return expected === payload.signature
 }
 
 function storeLicenseLocally(db, payload, fingerprint) {
   db.transaction(() => {
+    // Upsert license_state
     const existing = db.prepare('SELECT id FROM license_state LIMIT 1').get()
     if (existing) {
       db.prepare(`
         UPDATE license_state SET
           school_id = ?, hardware_fingerprint = ?, license_tier = ?,
-          license_expiry = ?, is_active = ?, updated_at = datetime('now')
+          license_expiry = ?, is_active = 1, updated_at = datetime('now')
         WHERE id = ?
-      `).run(payload.school_code, fingerprint, payload.tier, payload.expiry_date, payload.is_active ? 1 : 0, existing.id)
+      `).run(payload.school_id, fingerprint, payload.tier, payload.expiry_date, existing.id)
     } else {
       db.prepare(`
         INSERT INTO license_state (school_id, hardware_fingerprint, license_tier, license_expiry, is_active)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(payload.school_code, fingerprint, payload.tier, payload.expiry_date, payload.is_active ? 1 : 0)
+        VALUES (?, ?, ?, ?, 1)
+      `).run(payload.school_id, fingerprint, payload.tier, payload.expiry_date)
     }
 
+    // Upsert school_config
     const existingConfig = db.prepare('SELECT id FROM school_config LIMIT 1').get()
     if (existingConfig) {
       db.prepare(`
         UPDATE school_config SET
           school_name = ?, school_code = ?, director_name = ?,
-          country = ?, updated_at = datetime('now')
+          city = ?, country = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).run(payload.school_name, payload.school_code, payload.director_name, payload.country || 'Bénin', existingConfig.id)
+      `).run(payload.school_name, payload.school_code, payload.director_name, payload.city || '', payload.country || 'Bénin', existingConfig.id)
     } else {
       db.prepare(`
-        INSERT INTO school_config (school_name, school_code, director_name, country)
-        VALUES (?, ?, ?, ?)
-      `).run(payload.school_name, payload.school_code, payload.director_name, payload.country || 'Bénin')
+        INSERT INTO school_config (school_name, school_code, director_name, city, country)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(payload.school_name, payload.school_code, payload.director_name, payload.city || '', payload.country || 'Bénin')
     }
 
-    // Store grace period
-    db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('grace_period_days', ?, datetime('now'))").run(String(payload.grace_period_days || 15))
+    // Store features, deadlines, signature in app_settings
+    const settings = {
+      license_features: JSON.stringify(payload.features || []),
+      license_size: payload.size || '',
+      license_semesters_active: String(payload.semesters_active || 3),
+      semester_1_deadline: String(payload.semester_deadlines?.t1 || ''),
+      semester_2_deadline: String(payload.semester_deadlines?.t2 || ''),
+      semester_3_deadline: String(payload.semester_deadlines?.t3 || ''),
+      license_signature: payload.signature || '',
+      license_issued_at: payload.issued_at || '',
+      last_boot_date: new Date().toISOString(),
+    }
+
+    for (const [key, value] of Object.entries(settings)) {
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(key, value)
+    }
   })()
 }
 
@@ -57,74 +73,81 @@ router.get('/status', (req, res) => {
   const license = db.prepare('SELECT * FROM license_state LIMIT 1').get()
   const config = db.prepare('SELECT * FROM school_config LIMIT 1').get()
 
-  if (license && license.hardware_fingerprint) {
-    // Check expiry
-    const graceDays = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'grace_period_days'").get()?.value || '15')
-    const expiry = license.license_expiry ? new Date(license.license_expiry) : null
-    const graceEnd = expiry ? new Date(expiry.getTime() + graceDays * 86400000) : null
-    const now = new Date()
+  if (!license || !license.hardware_fingerprint) {
+    return res.json({ activated: false, configured: false, license_status: 'none' })
+  }
 
-    let license_status = 'active'
-    if (expiry && now > graceEnd) {
-      license_status = 'locked'
-    } else if (expiry && now > expiry) {
-      license_status = 'grace'
-    }
+  const now = new Date()
+  const expiry = license.license_expiry ? new Date(license.license_expiry) : null
 
-    // Check time tampering
-    const lastBoot = db.prepare("SELECT value FROM app_settings WHERE key = 'last_boot_date'").get()?.value
-    if (lastBoot && new Date(lastBoot) > now) {
-      license_status = 'tampered'
-    }
-
-    // Update last boot
+  // Time tampering check
+  const lastBoot = db.prepare("SELECT value FROM app_settings WHERE key = 'last_boot_date'").get()?.value
+  if (lastBoot && new Date(lastBoot) > now) {
     db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('last_boot_date', ?, datetime('now'))").run(now.toISOString())
-
     return res.json({
-      activated: true,
-      configured: config?.is_configured === 1,
-      school_name: config?.school_name || null,
-      school_code: license?.school_id || null,
-      tier: license?.license_tier || null,
-      expiry: license?.license_expiry || null,
-      license_status,
-      grace_days_remaining: graceEnd ? Math.max(0, Math.ceil((graceEnd - now) / 86400000)) : null,
+      activated: true, configured: config?.is_configured === 1,
+      license_status: 'tampered',
+      school_name: config?.school_name, school_code: license?.school_id, tier: license?.license_tier,
     })
   }
 
-  return res.json({ activated: false, configured: false })
+  // Update last boot
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('last_boot_date', ?, datetime('now'))").run(now.toISOString())
+
+  // Expiry check
+  let licenseStatus = 'active'
+  if (expiry && now > expiry) {
+    licenseStatus = 'expired'
+  }
+
+  if (!license.is_active) {
+    licenseStatus = 'suspended'
+  }
+
+  // Load features
+  const featuresRaw = db.prepare("SELECT value FROM app_settings WHERE key = 'license_features'").get()?.value
+  const features = featuresRaw ? JSON.parse(featuresRaw) : []
+
+  return res.json({
+    activated: true,
+    configured: config?.is_configured === 1,
+    license_status: licenseStatus,
+    school_name: config?.school_name || null,
+    school_code: license?.school_id || null,
+    tier: license?.license_tier || null,
+    expiry: license?.license_expiry || null,
+    features,
+  })
 })
 
 // ─── POST /api/activation/activate ──────────────────────────
-// Single step: license_key + fingerprint → done
 router.post('/activate', async (req, res) => {
   try {
-    const { license_key, fingerprint } = req.body
+    const { school_code, license_key, fingerprint } = req.body
 
-    if (!license_key || !fingerprint) {
+    if (!school_code || !license_key || !fingerprint) {
       return res.status(400).json({
         error: 'MISSING_FIELDS',
-        message: 'Clé de licence et empreinte matérielle requises',
+        message: 'Code école, clé de licence et empreinte matérielle requis',
       })
     }
 
     const response = await axios.post(`${CAP_URL}/api/activate`, {
-      action: 'activate',
+      school_id: school_code.trim().toUpperCase(),
       license_key: license_key.trim().toUpperCase(),
-      fingerprint,
+      hardware_fingerprint: fingerprint,
+    }, {
+      headers: { 'X-ScolaDesk-Secret': PAYLOAD_SECRET },
     })
 
-    if (!response.data.success) {
-      return res.status(400).json(response.data)
+    const payload = response.data.payload
+    if (!payload) {
+      return res.status(400).json({ error: 'NO_PAYLOAD', message: 'Aucune licence retournée' })
     }
 
-    // Verify and decode license payload
-    const payload = verifyPayload(response.data.payload, response.data.signature)
-    if (!payload) {
-      return res.status(400).json({
-        error: 'PAYLOAD_INVALID',
-        message: 'La signature de la licence est invalide',
-      })
+    // Verify signature
+    if (!verifySignature(payload)) {
+      return res.status(400).json({ error: 'SIGNATURE_INVALID', message: 'Signature de licence invalide — possible altération' })
     }
 
     // Store locally
@@ -133,7 +156,6 @@ router.post('/activate', async (req, res) => {
 
     return res.json({
       success: true,
-      type: response.data.type,
       school: {
         school_name: payload.school_name,
         school_code: payload.school_code,
@@ -141,14 +163,15 @@ router.post('/activate', async (req, res) => {
         tier: payload.tier,
         size: payload.size,
         expiry_date: payload.expiry_date,
-        grace_period_days: payload.grace_period_days,
         semesters_active: payload.semesters_active,
+        features: payload.features,
       },
     })
   } catch (err) {
     const data = err.response?.data
-    console.error('[ACTIVATION]', err.message)
-    return res.status(err.response?.status || 500).json(
+    const status = err.response?.status || 500
+    console.error('[ACTIVATION]', data?.error || err.message)
+    return res.status(status).json(
       data || { error: 'CONNECTION_ERROR', message: 'Impossible de contacter le serveur central. Vérifiez votre connexion internet.' }
     )
   }

@@ -2,11 +2,12 @@ import { useState } from 'react'
 import api from '../../utils/api'
 
 export default function ActivationPage({ onActivated }) {
+  const [schoolCode, setSchoolCode] = useState('')
   const [licenseKey, setLicenseKey] = useState('')
   const [schoolData, setSchoolData] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [step, setStep] = useState('key') // key | activating | done
+  const [step, setStep] = useState('form') // form | activating | done
 
   function formatKey(value) {
     const clean = value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 20)
@@ -26,13 +27,12 @@ export default function ActivationPage({ onActivated }) {
     setStep('activating')
 
     try {
-      // Capture hardware fingerprint
       let fingerprint
       if (window.scola) {
         const hwResult = await window.scola.invoke('get-hardware-fingerprint')
         if (!hwResult.success) {
           setError('Impossible de capturer l\'empreinte matérielle: ' + (hwResult.error || ''))
-          setStep('key')
+          setStep('form')
           setLoading(false)
           return
         }
@@ -41,8 +41,8 @@ export default function ActivationPage({ onActivated }) {
         fingerprint = 'dev-local-static-fingerprint'
       }
 
-      // Activate
       const res = await api.post('/api/activation/activate', {
+        school_code: schoolCode.trim().toUpperCase(),
         license_key: licenseKey.trim().toUpperCase(),
         fingerprint,
       })
@@ -52,11 +52,11 @@ export default function ActivationPage({ onActivated }) {
         setStep('done')
       } else {
         setError(res.data.message || 'Erreur d\'activation')
-        setStep('key')
+        setStep('form')
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Impossible de contacter le serveur central')
-      setStep('key')
+      setStep('form')
     }
     setLoading(false)
   }
@@ -73,27 +73,38 @@ export default function ActivationPage({ onActivated }) {
           <p className="text-steel-400 text-sm mt-1">Activation de votre licence</p>
         </div>
 
-        {/* Step: Enter license key */}
-        {step === 'key' && (
+        {/* Form */}
+        {step === 'form' && (
           <form onSubmit={handleActivate} className="space-y-4">
+            <div>
+              <label className="block text-sm text-steel-400 mb-1.5">Code école</label>
+              <input
+                type="text"
+                value={schoolCode}
+                onChange={e => setSchoolCode(e.target.value.toUpperCase())}
+                required
+                className="w-full px-4 py-3 bg-steel-800 border border-steel-700 rounded-lg text-steel-200 placeholder-steel-500 focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand text-center text-lg font-mono tracking-wider"
+                placeholder="SD-CC-XXXX"
+              />
+            </div>
             <div>
               <label className="block text-sm text-steel-400 mb-1.5">Clé de licence</label>
               <input
                 type="text"
                 value={licenseKey}
-                onChange={(e) => setLicenseKey(formatKey(e.target.value))}
+                onChange={e => setLicenseKey(formatKey(e.target.value))}
                 required
                 className="w-full px-4 py-3 bg-steel-800 border border-steel-700 rounded-lg text-steel-200 placeholder-steel-500 focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand text-center text-lg font-mono tracking-wider"
-                placeholder="SDLK-2026-XXXX-XXXX-XXXX"
+                placeholder="SDLK-YYYY-XXXX-XXXX-XXXX"
               />
             </div>
             <p className="text-xs text-steel-500 text-center">
-              Entrez la clé fournie par l'équipe ScolaDesk
+              Entrez le code école et la clé fournis par l'équipe ScolaDesk
             </p>
             {error && <p className="text-red-400 text-sm text-center">{error}</p>}
             <button
               type="submit"
-              disabled={loading || licenseKey.replace(/-/g, '').length < 20}
+              disabled={loading || !schoolCode.trim() || licenseKey.replace(/-/g, '').length < 20}
               className="w-full py-3 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white font-medium rounded-lg text-sm transition-colors"
             >
               Activer
@@ -104,7 +115,7 @@ export default function ActivationPage({ onActivated }) {
           </form>
         )}
 
-        {/* Step: Activating (spinner) */}
+        {/* Activating */}
         {step === 'activating' && (
           <div className="text-center py-8">
             <div className="w-12 h-12 border-2 border-brand border-t-transparent rounded-full animate-spin mx-auto mb-4" />
@@ -113,7 +124,7 @@ export default function ActivationPage({ onActivated }) {
           </div>
         )}
 
-        {/* Step: Done */}
+        {/* Done */}
         {step === 'done' && schoolData && (
           <div className="space-y-6">
             <div className="text-center">
@@ -147,7 +158,7 @@ export default function ActivationPage({ onActivated }) {
                     <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium mr-1 ${
                       schoolData.tier === 'PRO' ? 'bg-brand/20 text-brand-200' : 'bg-steel-700 text-steel-300'
                     }`}>{schoolData.tier}</span>
-                    {schoolData.size || ''}
+                    {schoolData.size}
                   </p>
                 </div>
                 {schoolData.expiry_date && (
@@ -156,10 +167,14 @@ export default function ActivationPage({ onActivated }) {
                     <p className="text-steel-200">{new Date(schoolData.expiry_date).toLocaleDateString('fr-FR')}</p>
                   </div>
                 )}
-                {schoolData.semesters_active && (
-                  <div>
-                    <p className="text-steel-500 text-xs">Trimestres</p>
-                    <p className="text-steel-200">{schoolData.semesters_active}/3</p>
+                {schoolData.features?.length > 0 && (
+                  <div className="col-span-2">
+                    <p className="text-steel-500 text-xs mb-1">Fonctionnalités</p>
+                    <div className="flex flex-wrap gap-1">
+                      {schoolData.features.map(f => (
+                        <span key={f} className="px-1.5 py-0.5 bg-steel-700 text-steel-300 rounded text-xs">{f}</span>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
