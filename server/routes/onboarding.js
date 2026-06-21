@@ -1,5 +1,6 @@
 const express = require('express')
 const router = express.Router()
+const XLSX = require('xlsx')
 const { getDb } = require('../db/init')
 const { hashPassword } = require('../utils/password')
 const { generateUUID, generateShortUID } = require('../utils/uid')
@@ -36,6 +37,16 @@ function requireStep(expected) {
   }
 }
 
+// ─── POST /api/onboarding/back — Go back one step ───────────
+router.post('/back', (req, res) => {
+  const current = getCurrentStep()
+  if (current <= 1) {
+    return res.status(400).json({ error: 'AT_START', message: 'Déjà à la première étape' })
+  }
+  setCurrentStep(current - 1)
+  return res.json({ success: true, current_step: current - 1 })
+})
+
 // ─── GET /api/onboarding/status ─────────────────────────────
 router.get('/status', (req, res) => {
   const db = getDb()
@@ -65,6 +76,16 @@ router.get('/status', (req, res) => {
   })
 })
 
+// ─── GET /api/onboarding/academic-year — Existing year (for back-nav) ─
+router.get('/academic-year', (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const periodeType = db.prepare("SELECT value FROM app_settings WHERE key = 'periode_type'").get()?.value || 'trimestre'
+  if (!yearId) return res.json({ year: null, periode_type: periodeType })
+  const year = db.prepare('SELECT label, start_date, end_date FROM academic_years WHERE id = ?').get(yearId)
+  return res.json({ year, periode_type: periodeType })
+})
+
 // ─── POST /api/onboarding/step1 — Confirm school info ──────
 // Read-only confirmation. Just advances the step.
 router.post('/step1', requireStep(1), (req, res) => {
@@ -72,116 +93,99 @@ router.post('/step1', requireStep(1), (req, res) => {
   return res.json({ success: true, message: 'Confirmation validée', next_step: 2 })
 })
 
+// ─── GET /api/onboarding/accounts — Existing accounts (no passwords) ─
+router.get('/accounts', (req, res) => {
+  const db = getDb()
+  const users = db.prepare(`
+    SELECT u.full_name, u.username, r.name AS role_name
+    FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE u.is_deleted = 0
+    ORDER BY r.name
+  `).all()
+  return res.json({ accounts: users })
+})
+
 // ─── POST /api/onboarding/step2 — Create accounts ──────────
-// Admin is mandatory. Secretary optional (mandatory for STANDARD).
-// Accountant optional (PRO only).
+// Admin is mandatory. Idempotent: skips usernames that already exist,
+// so going back and adding a missing role works without duplicates.
 router.post('/step2', requireStep(2), async (req, res) => {
   try {
     const { admin, secretary, accountant } = req.body
-
-    if (!admin || !admin.full_name || !admin.username || !admin.password) {
-      return res.status(400).json({
-        error: 'MISSING_FIELDS',
-        message: 'Les informations administrateur sont obligatoires',
-      })
-    }
-
-    if (admin.password.length < 6) {
-      return res.status(400).json({
-        error: 'PASSWORD_TOO_SHORT',
-        message: 'Le mot de passe doit contenir au moins 6 caractères',
-      })
-    }
-
     const db = getDb()
-
-    // Check if users already exist (idempotent)
-    const existingUsers = db.prepare('SELECT id FROM users LIMIT 1').get()
-    if (existingUsers) {
-      setCurrentStep(3)
-      return res.json({ success: true, message: 'Comptes déjà créés', next_step: 3 })
-    }
 
     const roles = {}
     db.prepare('SELECT id, name FROM roles').all().forEach(r => { roles[r.name] = r.id })
 
-    const createUser = db.transaction(async () => {
-      const users = []
-
-      // Admin (mandatory)
-      const adminHash = await hashPassword(admin.password)
-      db.prepare(`
-        INSERT INTO users (user_uid, matricule, full_name, username, password_hash, role_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(
-        generateUUID(), generateShortUID('U'),
-        admin.full_name.trim(), admin.username.trim().toLowerCase(),
-        adminHash, roles.admin
-      )
-      users.push('admin')
-
-      // Secretary (optional)
-      if (secretary && secretary.full_name && secretary.username && secretary.password) {
-        if (secretary.password.length < 6) {
-          throw new Error('Mot de passe secrétaire trop court (min 6)')
-        }
-        const secHash = await hashPassword(secretary.password)
-        db.prepare(`
-          INSERT INTO users (user_uid, matricule, full_name, username, password_hash, role_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(
-          generateUUID(), generateShortUID('U'),
-          secretary.full_name.trim(), secretary.username.trim().toLowerCase(),
-          secHash, roles.secretary
-        )
-        users.push('secretary')
-      }
-
-      // Accountant (PRO only, optional)
-      if (accountant && accountant.full_name && accountant.username && accountant.password) {
-        const license = db.prepare('SELECT license_tier FROM license_state LIMIT 1').get()
-        if (license?.license_tier !== 'PRO') {
-          throw new Error('Le rôle comptable nécessite une licence PRO')
-        }
-        if (accountant.password.length < 6) {
-          throw new Error('Mot de passe comptable trop court (min 6)')
-        }
-        const accHash = await hashPassword(accountant.password)
-        db.prepare(`
-          INSERT INTO users (user_uid, matricule, full_name, username, password_hash, role_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(
-          generateUUID(), generateShortUID('U'),
-          accountant.full_name.trim(), accountant.username.trim().toLowerCase(),
-          accHash, roles.accountant
-        )
-        users.push('accountant')
-      }
-
-      return users
-    })
-
-    const created = await createUser()
-
-    // Log
+    const existingByRole = {}
     db.prepare(`
-      INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
-      VALUES ('ONBOARDING_ACCOUNTS', 'system', 'step2', ?)
-    `).run(JSON.stringify({ created_roles: created }))
+      SELECT r.name AS role_name FROM users u JOIN roles r ON r.id = u.role_id WHERE u.is_deleted = 0
+    `).all().forEach(u => { existingByRole[u.role_name] = true })
+
+    const usernameTaken = (username) => {
+      if (!username) return false
+      return !!db.prepare('SELECT id FROM users WHERE username = ? AND is_deleted = 0').get(username.trim().toLowerCase())
+    }
+
+    // Admin required only if no admin exists yet
+    if (!existingByRole.admin) {
+      if (!admin || !admin.full_name || !admin.username || !admin.password) {
+        return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Les informations administrateur sont obligatoires' })
+      }
+      if (admin.password.length < 6) {
+        return res.status(400).json({ error: 'PASSWORD_TOO_SHORT', message: 'Le mot de passe doit contenir au moins 6 caractères' })
+      }
+    }
+
+    // Hash passwords for NEW accounts only (outside transaction)
+    const toCreate = []
+
+    if (admin && admin.full_name && admin.username && admin.password && !existingByRole.admin) {
+      if (usernameTaken(admin.username)) return res.status(409).json({ error: 'USERNAME_TAKEN', message: `Nom d'utilisateur déjà pris: ${admin.username}` })
+      toCreate.push({ role: 'admin', data: admin, hash: await hashPassword(admin.password) })
+    }
+
+    if (secretary && secretary.full_name && secretary.username && secretary.password && !existingByRole.secretary) {
+      if (secretary.password.length < 6) return res.status(400).json({ error: 'PASSWORD_TOO_SHORT', message: 'Mot de passe secrétaire trop court (min 6)' })
+      if (usernameTaken(secretary.username)) return res.status(409).json({ error: 'USERNAME_TAKEN', message: `Nom d'utilisateur déjà pris: ${secretary.username}` })
+      toCreate.push({ role: 'secretary', data: secretary, hash: await hashPassword(secretary.password) })
+    }
+
+    if (accountant && accountant.full_name && accountant.username && accountant.password && !existingByRole.accountant) {
+      const license = db.prepare('SELECT license_tier FROM license_state LIMIT 1').get()
+      if (license?.license_tier !== 'PRO') return res.status(400).json({ error: 'TIER_REQUIRED', message: 'Le rôle comptable nécessite une licence PRO' })
+      if (accountant.password.length < 6) return res.status(400).json({ error: 'PASSWORD_TOO_SHORT', message: 'Mot de passe comptable trop court (min 6)' })
+      if (usernameTaken(accountant.username)) return res.status(409).json({ error: 'USERNAME_TAKEN', message: `Nom d'utilisateur déjà pris: ${accountant.username}` })
+      toCreate.push({ role: 'accountant', data: accountant, hash: await hashPassword(accountant.password) })
+    }
+
+    const created = []
+    db.transaction(() => {
+      for (const item of toCreate) {
+        db.prepare(`
+          INSERT INTO users (user_uid, matricule, full_name, username, password_hash, role_id)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(generateUUID(), generateShortUID('U'), item.data.full_name.trim(), item.data.username.trim().toLowerCase(), item.hash, roles[item.role])
+        created.push(item.role)
+      }
+    })()
+
+    if (created.length > 0) {
+      db.prepare(`
+        INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
+        VALUES ('ONBOARDING_ACCOUNTS', 'system', 'step2', ?)
+      `).run(JSON.stringify({ created_roles: created }))
+    }
 
     setCurrentStep(3)
     return res.json({
       success: true,
-      message: `${created.length} compte(s) créé(s)`,
+      message: created.length > 0 ? `${created.length} compte(s) créé(s)` : 'Comptes existants conservés',
       created_roles: created,
       next_step: 3,
     })
   } catch (err) {
     console.error('[ONBOARDING STEP2]', err)
-    return res.status(500).json({
-      error: 'SERVER_ERROR',
-      message: err.message || 'Erreur serveur',
-    })
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
   }
 })
 
@@ -207,22 +211,23 @@ router.post('/step3', requireStep(3), (req, res) => {
 
     const db = getDb()
 
-    // Check if academic year already exists
-    const existing = db.prepare('SELECT id FROM academic_years WHERE label = ?').get(label)
-    if (existing) {
-      // Update settings and advance
-      db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('current_academic_year_id', ?, datetime('now'))").run(String(existing.id))
-      db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('periode_type', ?, datetime('now'))").run(periode_type)
-      setCurrentStep(4)
-      return res.json({ success: true, message: 'Année académique déjà configurée', next_step: 4 })
+    // If an academic year already exists (back-nav), update it in place
+    // instead of creating a duplicate.
+    const existingId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+    let yearId
+
+    if (existingId) {
+      db.prepare(`
+        UPDATE academic_years SET label = ?, start_date = ?, end_date = ? WHERE id = ?
+      `).run(label.trim(), start_date, end_date, existingId)
+      yearId = existingId
+    } else {
+      const result = db.prepare(`
+        INSERT INTO academic_years (label, start_date, end_date, is_active)
+        VALUES (?, ?, ?, 1)
+      `).run(label.trim(), start_date, end_date)
+      yearId = result.lastInsertRowid
     }
-
-    const result = db.prepare(`
-      INSERT INTO academic_years (label, start_date, end_date, is_active)
-      VALUES (?, ?, ?, 1)
-    `).run(label.trim(), start_date, end_date)
-
-    const yearId = result.lastInsertRowid
 
     // Store settings
     const settings = {
@@ -255,6 +260,31 @@ router.post('/step3', requireStep(3), (req, res) => {
       message: err.message || 'Erreur serveur',
     })
   }
+})
+
+// ─── POST /api/onboarding/reset — Dev only: reset onboarding ─
+router.post('/reset', (req, res) => {
+  if (process.env.NODE_ENV !== 'development') {
+    return res.status(403).json({ error: 'FORBIDDEN', message: 'Dev only' })
+  }
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare("DELETE FROM app_settings WHERE key = 'onboarding_step'").run()
+    db.prepare("DELETE FROM users").run()
+    db.prepare("DELETE FROM academic_years").run()
+    db.prepare("UPDATE levels SET is_active = 0").run()
+    db.prepare("DELETE FROM series").run()
+    db.prepare("DELETE FROM level_subjects").run()
+    db.prepare("DELETE FROM assessment_templates").run()
+    db.prepare("DELETE FROM classrooms").run()
+    db.prepare("DELETE FROM classroom_teachers").run()
+    db.prepare("DELETE FROM app_settings WHERE key LIKE 'assessment_config_%'").run()
+    db.prepare("DELETE FROM app_settings WHERE key = 'current_academic_year_id'").run()
+    db.prepare("DELETE FROM app_settings WHERE key = 'periode_type'").run()
+    db.prepare("DELETE FROM app_settings WHERE key = 'periode_count'").run()
+    db.prepare("DELETE FROM app_settings WHERE key = 'total_rooms'").run()
+  })()
+  return res.json({ success: true, message: 'Onboarding reset' })
 })
 
 // ─── GET /api/onboarding/levels — List all levels ───────────
@@ -413,7 +443,15 @@ router.get('/assessment-data', (req, res) => {
     WHERE ls.is_active = 1
     ORDER BY ls.level_id, s.name
   `).all()
-  return res.json({ levels, level_subjects: levelSubjects, academic_year_id: yearId, periode_count: periodeCount })
+
+  // Saved assessment config per level (for back-nav)
+  const savedConfig = {}
+  for (const l of levels) {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(`assessment_config_${l.id}`)
+    if (row) savedConfig[l.id] = JSON.parse(row.value)
+  }
+
+  return res.json({ levels, level_subjects: levelSubjects, academic_year_id: yearId, periode_count: periodeCount, saved_config: savedConfig })
 })
 
 // ─── POST /api/onboarding/step7 — Assessment configuration ──
@@ -526,8 +564,13 @@ router.post('/step8', requireStep(8), (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
 
+      const existsStmt = db.prepare('SELECT id FROM classrooms WHERE label = ? AND academic_year_id = ? AND is_deleted = 0')
+
       for (const c of classrooms) {
         if (!c.label || !c.level_id) continue
+
+        // Skip if a classroom with this label already exists for the year (back-nav re-submit)
+        if (existsStmt.get(c.label.trim(), parseInt(yearId))) continue
 
         const uid = generateUUID()
         const result = classStmt.run(
@@ -569,6 +612,388 @@ router.post('/step8', requireStep(8), (req, res) => {
     return res.json({ success: true, message: `${classrooms.length} classe(s) créée(s)`, next_step: 9 })
   } catch (err) {
     console.error('[ONBOARDING STEP8]', err)
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
+  }
+})
+
+// ─── GET /api/onboarding/teachers-data — Existing teachers + mode (back-nav) ─
+router.get('/teachers-data', (req, res) => {
+  const db = getDb()
+  const mode = db.prepare("SELECT value FROM app_settings WHERE key = 'matricule_mode'").get()?.value || 'custom'
+  const teachers = db.prepare('SELECT id, full_name, phone, email FROM teachers WHERE is_deleted = 0 ORDER BY full_name').all()
+  return res.json({ matricule_mode: mode, teachers })
+})
+
+// ─── POST /api/onboarding/step9 — Matricule config + Teachers ─
+router.post('/step9', requireStep(9), (req, res) => {
+  try {
+    const { matricule_mode, teachers } = req.body
+
+    if (!matricule_mode || !['custom', 'educmaster', 'manual'].includes(matricule_mode)) {
+      return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Mode de matricule requis (custom, educmaster, manual)' })
+    }
+
+    const db = getDb()
+    db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('matricule_mode', ?, datetime('now'))").run(matricule_mode)
+
+    if (teachers && Array.isArray(teachers) && teachers.length > 0) {
+      const stmt = db.prepare(`
+        INSERT INTO teachers (teacher_uid, full_name, phone, email)
+        VALUES (?, ?, ?, ?)
+      `)
+      // Skip teachers that already exist by name (back-nav re-submit dedup)
+      const existsStmt = db.prepare('SELECT id FROM teachers WHERE full_name = ? AND is_deleted = 0')
+      db.transaction(() => {
+        for (const t of teachers) {
+          if (!t.full_name?.trim()) continue
+          if (existsStmt.get(t.full_name.trim())) continue
+          stmt.run(generateUUID(), t.full_name.trim(), t.phone?.trim() || null, t.email?.trim() || null)
+        }
+      })()
+    }
+
+    db.prepare(`
+      INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
+      VALUES ('ONBOARDING_TEACHERS', 'system', 'step9', ?)
+    `).run(JSON.stringify({ matricule_mode, teachers_count: teachers?.length || 0 }))
+
+    setCurrentStep(10)
+    return res.json({ success: true, message: 'Configuration enregistrée', next_step: 10 })
+  } catch (err) {
+    console.error('[ONBOARDING STEP9]', err)
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
+  }
+})
+
+// ─── GET /api/onboarding/student-template/:classroomId — Excel template ─
+router.get('/student-template/:classroomId', (req, res) => {
+  const db = getDb()
+  const classroom = db.prepare(`
+    SELECT c.*, l.name AS level_name FROM classrooms c
+    JOIN levels l ON l.id = c.level_id
+    WHERE c.id = ?
+  `).get(req.params.classroomId)
+
+  if (!classroom) return res.status(404).json({ error: 'NOT_FOUND' })
+
+  const mode = db.prepare("SELECT value FROM app_settings WHERE key = 'matricule_mode'").get()?.value || 'custom'
+
+  const headers = ['Nom complet', 'Sexe (M/F)']
+  if (mode === 'educmaster') headers.push('Matricule Educmaster')
+  else if (mode === 'manual') headers.push('Matricule (optionnel)')
+  headers.push('Date de naissance', 'Lieu de naissance', 'Nom du tuteur', 'Téléphone tuteur')
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers])
+
+  // Set column widths
+  ws['!cols'] = headers.map(() => ({ wch: 22 }))
+
+  XLSX.utils.book_append_sheet(wb, ws, classroom.label || 'Élèves')
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', `attachment; filename="${(classroom.label || 'eleves').replace(/\s/g, '_')}.xlsx"`)
+  return res.send(buf)
+})
+
+// ─── GET /api/onboarding/student-data — Classrooms + existing students ─
+router.get('/student-data', (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const mode = db.prepare("SELECT value FROM app_settings WHERE key = 'matricule_mode'").get()?.value || 'custom'
+  const classrooms = db.prepare(`
+    SELECT c.id, c.label, c.level_id, l.name AS level_name FROM classrooms c
+    JOIN levels l ON l.id = c.level_id
+    WHERE c.academic_year_id = ? AND c.is_deleted = 0
+    ORDER BY l.display_order, c.label
+  `).all(yearId || 0)
+
+  const counts = {}
+  for (const c of classrooms) {
+    const row = db.prepare('SELECT COUNT(*) as cnt FROM enrollments WHERE classroom_id = ? AND is_deleted = 0').get(c.id)
+    counts[c.id] = row?.cnt || 0
+  }
+
+  return res.json({ classrooms, student_counts: counts, matricule_mode: mode, academic_year_id: yearId })
+})
+
+// ─── POST /api/onboarding/upload-students/:classroomId — Import Excel ─
+router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '10mb' }), (req, res) => {
+  try {
+    const db = getDb()
+    const classroomId = parseInt(req.params.classroomId)
+    const yearId = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value || '0')
+    const mode = db.prepare("SELECT value FROM app_settings WHERE key = 'matricule_mode'").get()?.value || 'custom'
+    const schoolCode = db.prepare('SELECT school_code FROM school_config LIMIT 1').get()?.school_code || 'SCH'
+
+    const classroom = db.prepare('SELECT * FROM classrooms WHERE id = ?').get(classroomId)
+    if (!classroom) return res.status(404).json({ error: 'NOT_FOUND', message: 'Classe introuvable' })
+
+    const wb = XLSX.read(req.body)
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws)
+
+    if (rows.length === 0) return res.status(400).json({ error: 'EMPTY', message: 'Fichier vide' })
+
+    const errors = []
+    const valid = []
+
+    // Get existing student count for auto-matricule
+    let seqNum = db.prepare('SELECT COUNT(*) as cnt FROM students').get()?.cnt || 0
+
+    rows.forEach((row, i) => {
+      const name = (row['Nom complet'] || '').trim()
+      const gender = (row['Sexe (M/F)'] || '').trim().toUpperCase()
+
+      if (!name) { errors.push({ row: i + 2, message: 'Nom complet manquant' }); return }
+      if (gender && !['M', 'F'].includes(gender)) { errors.push({ row: i + 2, message: `Sexe invalide: "${gender}" (M ou F)` }); return }
+
+      let matricule = null
+      if (mode === 'educmaster') {
+        matricule = (row['Matricule Educmaster'] || '').toString().trim()
+        if (!matricule) { errors.push({ row: i + 2, message: 'Matricule Educmaster manquant' }); return }
+      } else if (mode === 'manual') {
+        matricule = (row['Matricule (optionnel)'] || '').toString().trim() || null
+      } else {
+        seqNum++
+        const year = new Date().getFullYear()
+        matricule = `${schoolCode}/${year}/${String(seqNum).padStart(4, '0')}`
+      }
+
+      valid.push({
+        full_name: name,
+        gender: gender || null,
+        matricule,
+        birth_date: (row['Date de naissance'] || '').toString().trim() || null,
+        birth_place: (row['Lieu de naissance'] || '').toString().trim() || null,
+        guardian_name: (row['Nom du tuteur'] || '').toString().trim() || null,
+        guardian_phone: (row['Téléphone tuteur'] || '').toString().trim() || null,
+      })
+    })
+
+    if (valid.length === 0) {
+      return res.status(400).json({ error: 'NO_VALID', message: 'Aucune ligne valide', errors })
+    }
+
+    // Insert students + enrollments + guardians
+    const studentStmt = db.prepare(`
+      INSERT INTO students (student_uid, matricule, full_name, birth_date, birth_place, gender)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    const enrollStmt = db.prepare(`
+      INSERT INTO enrollments (enrollment_uid, student_id, classroom_id, academic_year_id)
+      VALUES (?, ?, ?, ?)
+    `)
+    const guardianStmt = db.prepare(`
+      INSERT INTO guardians (student_id, full_name, phone, is_primary)
+      VALUES (?, ?, ?, 1)
+    `)
+
+    let imported = 0
+    db.transaction(() => {
+      for (const s of valid) {
+        const result = studentStmt.run(generateUUID(), s.matricule, s.full_name, s.birth_date, s.birth_place, s.gender)
+        const studentId = result.lastInsertRowid
+        enrollStmt.run(generateUUID(), studentId, classroomId, yearId)
+        if (s.guardian_name) {
+          guardianStmt.run(studentId, s.guardian_name, s.guardian_phone)
+        }
+        imported++
+      }
+    })()
+
+    return res.json({
+      success: true,
+      imported,
+      errors,
+      message: `${imported} élève(s) importé(s)${errors.length > 0 ? `, ${errors.length} erreur(s)` : ''}`,
+    })
+  } catch (err) {
+    console.error('[UPLOAD STUDENTS]', err)
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
+  }
+})
+
+// ─── POST /api/onboarding/step10 — Advance after student import ─
+router.post('/step10', requireStep(10), (req, res) => {
+  const db = getDb()
+  const studentCount = db.prepare('SELECT COUNT(*) as cnt FROM students').get()?.cnt || 0
+  if (studentCount === 0) {
+    return res.status(400).json({ error: 'NO_STUDENTS', message: 'Importez au moins des élèves dans une classe' })
+  }
+
+  db.prepare(`
+    INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
+    VALUES ('ONBOARDING_STUDENTS', 'system', 'step10', ?)
+  `).run(JSON.stringify({ student_count: studentCount }))
+
+  setCurrentStep(11)
+  return res.json({ success: true, message: `${studentCount} élève(s) importé(s) au total`, next_step: 11 })
+})
+
+// ─── GET /api/onboarding/assignment-data — For teacher assignments ─
+router.get('/assignment-data', (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const classrooms = db.prepare(`
+    SELECT c.id, c.label, c.level_id, l.name AS level_name FROM classrooms c
+    JOIN levels l ON l.id = c.level_id
+    WHERE c.academic_year_id = ? AND c.is_deleted = 0
+    ORDER BY l.display_order, c.label
+  `).all(yearId || 0)
+  const teachers = db.prepare('SELECT id, full_name FROM teachers WHERE is_active = 1 AND is_deleted = 0 ORDER BY full_name').all()
+  const levelSubjects = db.prepare(`
+    SELECT ls.level_id, ls.subject_id, s.name AS subject_name, s.short_code
+    FROM level_subjects ls
+    JOIN subjects s ON s.id = ls.subject_id
+    WHERE ls.is_active = 1
+    ORDER BY s.name
+  `).all()
+  const existing = db.prepare(`
+    SELECT * FROM teacher_schedule WHERE academic_year_id = ?
+  `).all(yearId || 0)
+  return res.json({ classrooms, teachers, level_subjects: levelSubjects, existing_assignments: existing, academic_year_id: yearId })
+})
+
+// ─── POST /api/onboarding/step11 — Teacher assignments ──────
+router.post('/step11', requireStep(11), (req, res) => {
+  try {
+    const { assignments } = req.body
+    const db = getDb()
+    const yearId = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value || '0')
+
+    if (assignments && Array.isArray(assignments) && assignments.length > 0) {
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO teacher_schedule (teacher_id, classroom_id, subject_id, academic_year_id)
+        VALUES (?, ?, ?, ?)
+      `)
+      db.transaction(() => {
+        for (const a of assignments) {
+          if (a.teacher_id && a.classroom_id && a.subject_id) {
+            stmt.run(a.teacher_id, a.classroom_id, a.subject_id, yearId)
+          }
+        }
+      })()
+    }
+
+    db.prepare(`
+      INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
+      VALUES ('ONBOARDING_ASSIGNMENTS', 'system', 'step11', ?)
+    `).run(JSON.stringify({ count: assignments?.length || 0 }))
+
+    setCurrentStep(12)
+    return res.json({ success: true, message: 'Affectations enregistrées', next_step: 12 })
+  } catch (err) {
+    console.error('[ONBOARDING STEP11]', err)
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
+  }
+})
+
+// ─── GET /api/onboarding/fee-data — Classrooms for fee setup ─
+router.get('/fee-data', (req, res) => {
+  const db = getDb()
+  const license = db.prepare('SELECT license_tier FROM license_state LIMIT 1').get()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
+  const classrooms = db.prepare(`
+    SELECT c.id, c.label, c.level_id, c.expected_tuition, l.name AS level_name FROM classrooms c
+    JOIN levels l ON l.id = c.level_id
+    WHERE c.academic_year_id = ? AND c.is_deleted = 0
+    ORDER BY l.display_order, c.label
+  `).all(yearId || 0)
+  const existing = db.prepare('SELECT * FROM fee_structures WHERE academic_year_id = ? AND is_active = 1').all(yearId || 0)
+  return res.json({ is_pro: license?.license_tier === 'PRO', classrooms, existing_fees: existing, periode_count: periodeCount, academic_year_id: yearId })
+})
+
+// ─── POST /api/onboarding/step12 — Fee structures (PRO) ─────
+router.post('/step12', requireStep(12), (req, res) => {
+  try {
+    const db = getDb()
+    const license = db.prepare('SELECT license_tier FROM license_state LIMIT 1').get()
+
+    if (license?.license_tier !== 'PRO') {
+      setCurrentStep(13)
+      return res.json({ success: true, message: 'Licence Standard — frais non applicables', next_step: 13 })
+    }
+
+    const { fees } = req.body
+    const yearId = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value || '0')
+
+    if (fees && Array.isArray(fees) && fees.length > 0) {
+      const stmt = db.prepare(`
+        INSERT OR IGNORE INTO fee_structures (classroom_id, academic_year_id, semester, label, amount, due_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      db.transaction(() => {
+        for (const f of fees) {
+          if (f.classroom_id && f.label?.trim() && f.amount > 0) {
+            stmt.run(f.classroom_id, yearId, f.semester || null, f.label.trim(), f.amount, f.due_date || null)
+          }
+        }
+      })()
+    }
+
+    db.prepare(`
+      INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
+      VALUES ('ONBOARDING_FEES', 'system', 'step12', ?)
+    `).run(JSON.stringify({ fees_count: fees?.length || 0 }))
+
+    setCurrentStep(13)
+    return res.json({ success: true, message: 'Frais configurés', next_step: 13 })
+  } catch (err) {
+    console.error('[ONBOARDING STEP12]', err)
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
+  }
+})
+
+// ─── GET /api/onboarding/summary — Final check ──────────────
+router.get('/summary', (req, res) => {
+  const db = getDb()
+  const config = db.prepare('SELECT * FROM school_config LIMIT 1').get()
+  const license = db.prepare('SELECT * FROM license_state LIMIT 1').get()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const year = yearId ? db.prepare('SELECT label FROM academic_years WHERE id = ?').get(yearId) : null
+  const levels = db.prepare('SELECT COUNT(*) as cnt FROM levels WHERE is_active = 1').get()?.cnt || 0
+  const classrooms = db.prepare('SELECT COUNT(*) as cnt FROM classrooms WHERE academic_year_id = ? AND is_deleted = 0').all(yearId || 0)[0]?.cnt || 0
+  const students = db.prepare('SELECT COUNT(*) as cnt FROM students WHERE is_deleted = 0').get()?.cnt || 0
+  const teachers = db.prepare('SELECT COUNT(*) as cnt FROM teachers WHERE is_deleted = 0').get()?.cnt || 0
+  const users = db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_deleted = 0').get()?.cnt || 0
+  const subjects = db.prepare('SELECT COUNT(*) as cnt FROM level_subjects WHERE is_active = 1').get()?.cnt || 0
+  const assignments = db.prepare('SELECT COUNT(*) as cnt FROM teacher_schedule WHERE academic_year_id = ?').get(yearId || 0)?.cnt || 0
+
+  return res.json({
+    school_name: config?.school_name, school_code: config?.school_code,
+    tier: license?.license_tier, academic_year: year?.label,
+    checks: [
+      { label: 'Année académique', ok: !!yearId, value: year?.label || '—' },
+      { label: 'Comptes utilisateurs', ok: users > 0, value: `${users}` },
+      { label: 'Niveaux actifs', ok: levels > 0, value: `${levels}` },
+      { label: 'Matières assignées', ok: subjects > 0, value: `${subjects}` },
+      { label: 'Classes créées', ok: classrooms > 0, value: `${classrooms}` },
+      { label: 'Enseignants', ok: teachers > 0, value: `${teachers}` },
+      { label: 'Élèves importés', ok: students > 0, value: `${students}` },
+      { label: 'Affectations enseignants', ok: assignments > 0, value: `${assignments}` },
+    ],
+    all_ok: !!yearId && users > 0 && levels > 0 && classrooms > 0 && students > 0 && teachers > 0,
+  })
+})
+
+// ─── POST /api/onboarding/step13 — Finalize ─────────────────
+router.post('/step13', requireStep(13), (req, res) => {
+  try {
+    const db = getDb()
+    db.prepare('UPDATE school_config SET is_configured = 1, updated_at = datetime(\'now\') WHERE id = (SELECT id FROM school_config LIMIT 1)').run()
+
+    db.prepare(`
+      INSERT INTO audit_logs (action, entity_type, entity_id, new_values)
+      VALUES ('ONBOARDING_COMPLETE', 'system', 'step13', '{}')
+    `).run()
+
+    setCurrentStep(14)
+    return res.json({ success: true, message: 'Configuration terminée' })
+  } catch (err) {
+    console.error('[ONBOARDING STEP13]', err)
     return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
   }
 })

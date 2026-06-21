@@ -58,6 +58,10 @@ function runMigrations() {
         {
             version: '002_onboarding_fields',
             run: require('./migration/002_onboarding_fields').migration002
+        },
+        {
+            version: '003_permission_codes',
+            run: require('./migration/003_permission_codes').migration003
         }
     ]
 

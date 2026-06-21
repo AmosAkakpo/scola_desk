@@ -1,7 +1,22 @@
 import { useState, useEffect } from 'react'
-import { AuthProvider } from './context/AuthContext.jsx'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './context/AuthContext.jsx'
 import ActivationPage from './pages/general/ActivationPage'
 import OnboardingWizard from './pages/general/OnboardingWizard'
+import LoginPage from './pages/general/LoginPage'
+import Layout from './components/Layout'
+import DashboardPage from './pages/dashboard/DashboardPage'
+import StudentsPage from './pages/students/StudentsPage'
+import StudentDetailPage from './pages/students/StudentDetailPage'
+import TeachersPage from './pages/teachers/TeachersPage'
+import TeacherDetailPage from './pages/teachers/TeacherDetailPage'
+import ClassroomsPage from './pages/classrooms/ClassroomsPage'
+import ClassroomDetailPage from './pages/classrooms/ClassroomDetailPage'
+import GradesPage from './pages/grades/GradesPage'
+import GradesComputePage from './pages/grades/GradesComputePage'
+import ReportCardsPage from './pages/reports/ReportCardsPage'
+import ReportCardViewPage from './pages/reports/ReportCardViewPage'
+import SettingsPage from './pages/settings/SettingsPage'
 import api from './utils/api'
 import './App.css'
 
@@ -16,12 +31,7 @@ function ExpiredScreen({ schoolName, expiry }) {
         </div>
         <h1 className="text-xl font-medium text-steel-200 mb-2">Licence expirée</h1>
         <p className="text-sm text-steel-400 mb-4">{schoolName || 'ScolaDesk'}</p>
-        <p className="text-sm text-steel-500">
-          Votre licence a expiré le {expiry ? new Date(expiry).toLocaleDateString('fr-FR') : '—'}.
-        </p>
-        <p className="text-sm text-steel-500 mt-2">
-          Contactez ScolaDesk pour renouveler votre licence.
-        </p>
+        <p className="text-sm text-steel-500">Votre licence a expiré le {expiry ? new Date(expiry).toLocaleDateString('fr-FR') : '—'}. Contactez ScolaDesk pour renouveler.</p>
       </div>
     </div>
   )
@@ -37,10 +47,7 @@ function SuspendedScreen({ schoolName }) {
           </svg>
         </div>
         <h1 className="text-xl font-medium text-steel-200 mb-2">Licence suspendue</h1>
-        <p className="text-sm text-steel-400 mb-4">{schoolName || 'ScolaDesk'}</p>
-        <p className="text-sm text-steel-500">
-          Votre licence a été suspendue. Contactez ScolaDesk.
-        </p>
+        <p className="text-sm text-steel-500">{schoolName || 'ScolaDesk'} — Contactez ScolaDesk.</p>
       </div>
     </div>
   )
@@ -56,11 +63,55 @@ function TamperedScreen() {
           </svg>
         </div>
         <h1 className="text-xl font-medium text-steel-200 mb-2">Erreur système</h1>
-        <p className="text-sm text-steel-500">
-          Une anomalie a été détectée sur la date du système. Contactez ScolaDesk.
-        </p>
+        <p className="text-sm text-steel-500">Une anomalie a été détectée. Contactez ScolaDesk.</p>
       </div>
     </div>
+  )
+}
+
+function LoadingScreen() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-steel-900">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-12 h-12 bg-steel-900 border-2 border-steel-700 rounded-2xl flex items-center justify-center">
+          <span className="text-brand text-2xl font-semibold">S</span>
+        </div>
+        <div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+      </div>
+    </div>
+  )
+}
+
+function ProtectedApp({ schoolInfo }) {
+  const { isAuthenticated, logout } = useAuth()
+  const [loggedIn, setLoggedIn] = useState(isAuthenticated)
+
+  useEffect(() => { setLoggedIn(isAuthenticated) }, [isAuthenticated])
+
+  if (!loggedIn) {
+    return <LoginPage onLogin={() => setLoggedIn(true)} />
+  }
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Layout schoolInfo={schoolInfo} />}>
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/students" element={<StudentsPage />} />
+          <Route path="/students/:id" element={<StudentDetailPage />} />
+          <Route path="/teachers" element={<TeachersPage />} />
+          <Route path="/teachers/:id" element={<TeacherDetailPage />} />
+          <Route path="/classrooms" element={<ClassroomsPage />} />
+          <Route path="/classrooms/:id" element={<ClassroomDetailPage />} />
+          <Route path="/grades" element={<GradesPage />} />
+          <Route path="/grades/compute" element={<GradesComputePage />} />
+          <Route path="/report-cards" element={<ReportCardsPage />} />
+          <Route path="/report-cards/:id" element={<ReportCardViewPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
 }
 
@@ -73,63 +124,26 @@ function AppContent() {
       try {
         const res = await api.get('/api/activation/status')
         const { activated, configured, license_status } = res.data
-
         setSchoolInfo(res.data)
 
-        if (!activated) {
-          setAppState('activation')
-          return
-        }
-
+        if (!activated) { setAppState('activation'); return }
         if (license_status === 'tampered') { setAppState('tampered'); return }
         if (license_status === 'expired') { setAppState('expired'); return }
         if (license_status === 'suspended') { setAppState('suspended'); return }
-
         setAppState(configured ? 'app' : 'onboarding')
-      } catch {
-        setTimeout(checkStatus, 1000)
-      }
+      } catch { setTimeout(checkStatus, 1000) }
     }
     checkStatus()
   }, [])
 
-  if (appState === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-steel-900">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 bg-steel-900 border-2 border-steel-700 rounded-2xl flex items-center justify-center">
-            <span className="text-brand text-2xl font-semibold">S</span>
-          </div>
-          <div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin" />
-        </div>
-      </div>
-    )
-  }
-
-  if (appState === 'activation') {
-    return <ActivationPage onActivated={(data) => { setSchoolInfo(data); setAppState('onboarding') }} />
-  }
-
+  if (appState === 'loading') return <LoadingScreen />
+  if (appState === 'activation') return <ActivationPage onActivated={(data) => { setSchoolInfo(data); setAppState('onboarding') }} />
   if (appState === 'tampered') return <TamperedScreen />
   if (appState === 'expired') return <ExpiredScreen schoolName={schoolInfo?.school_name} expiry={schoolInfo?.expiry} />
   if (appState === 'suspended') return <SuspendedScreen schoolName={schoolInfo?.school_name} />
+  if (appState === 'onboarding') return <OnboardingWizard onComplete={() => setAppState('app')} />
 
-  if (appState === 'onboarding') {
-    return <OnboardingWizard onComplete={() => setAppState('app')} />
-  }
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-steel-50">
-      <div className="text-center">
-        <div className="w-16 h-16 bg-steel-900 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <span className="text-brand-200 text-3xl font-semibold">S</span>
-        </div>
-        <h1 className="text-xl font-medium text-steel-900 mb-1">{schoolInfo?.school_name || 'ScolaDesk'}</h1>
-        <p className="text-steel-500 text-sm mb-6">{schoolInfo?.school_code || ''}</p>
-        <p className="text-steel-400 text-sm">Configuration terminée — login à venir (Phase 4)</p>
-      </div>
-    </div>
-  )
+  return <ProtectedApp schoolInfo={schoolInfo} />
 }
 
 export default function App() {
