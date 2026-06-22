@@ -62,6 +62,10 @@ function runMigrations() {
         {
             version: '003_permission_codes',
             run: require('./migration/003_permission_codes').migration003
+        },
+        {
+            version: '004_semester_decisions',
+            run: require('./migration/004_semester_decisions').migration004
         }
     ]
 

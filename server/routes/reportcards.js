@@ -1,0 +1,204 @@
+const express = require('express')
+const router = express.Router()
+const { getDb } = require('../db/init')
+const { generateUUID } = require('../utils/uid')
+const { requireAuth } = require('../middleware/requireAuth')
+const { requirePermission } = require('../middleware/requirePermission')
+
+router.use(requireAuth)
+
+function getSchoolSections(db) {
+  try { return JSON.parse(db.prepare("SELECT value FROM app_settings WHERE key = 'school_section_config'").get()?.value || '[]') }
+  catch { return [] }
+}
+
+function getSectionName(sections, levelName, defaultName) {
+  for (const s of sections) {
+    if (s.level_from && s.level_to && s.name) {
+      if (levelName >= s.level_from && levelName <= s.level_to) return s.name
+    }
+  }
+  return defaultName
+}
+
+// ─── GET /api/report-cards/list/:classroomId/:semester — Existing snapshots ─
+router.get('/list/:classroomId/:semester', requirePermission('reports.view'), (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+
+  const snapshots = db.prepare(`
+    SELECT rc.id, rc.snapshot_uid, rc.student_id, rc.generated_at, s.full_name, s.matricule
+    FROM report_card_snapshots rc
+    JOIN students s ON s.id = rc.student_id
+    WHERE rc.classroom_id = ? AND rc.academic_year_id = ? AND rc.semester = ?
+    ORDER BY s.full_name
+  `).all(req.params.classroomId, yearId, req.params.semester)
+
+  return res.json({ snapshots })
+})
+
+// ─── POST /api/report-cards/generate — Generate snapshots ───
+router.post('/generate', requirePermission('reports.edit'), (req, res) => {
+  const db = getDb()
+  const { classroom_id, semester, student_ids } = req.body
+  if (!classroom_id || !semester) return res.status(400).json({ error: 'MISSING_FIELDS' })
+
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const year = db.prepare('SELECT label FROM academic_years WHERE id = ?').get(yearId)
+  const classroom = db.prepare('SELECT c.*, l.name AS level_name FROM classrooms c JOIN levels l ON l.id = c.level_id WHERE c.id = ?').get(classroom_id)
+  const config = db.prepare('SELECT * FROM school_config LIMIT 1').get()
+  const sections = getSchoolSections(db)
+  const sectionName = getSectionName(sections, classroom?.level_name, config?.school_name || 'ScolaDesk')
+  const logoPath = db.prepare("SELECT value FROM app_settings WHERE key = 'school_logo_path'").get()?.value || null
+
+  // Get all students or specific ones
+  let studentQuery = `
+    SELECT s.id, s.full_name, s.matricule, s.gender
+    FROM students s
+    JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
+    WHERE s.is_deleted = 0
+  `
+  const studentParams = [classroom_id]
+  if (student_ids?.length > 0) {
+    studentQuery += ` AND s.id IN (${student_ids.map(() => '?').join(',')})`
+    studentParams.push(...student_ids)
+  }
+  studentQuery += ' ORDER BY s.full_name'
+  const students = db.prepare(studentQuery).all(...studentParams)
+
+  const classSize = db.prepare('SELECT COUNT(*) as cnt FROM enrollments WHERE classroom_id = ? AND is_deleted = 0').get(classroom_id)?.cnt || 0
+  const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
+
+  let generated = 0
+
+  db.transaction(() => {
+    // Delete existing snapshots for these students+semester (regenerate)
+    for (const student of students) {
+      db.prepare('DELETE FROM report_card_snapshots WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?')
+        .run(student.id, classroom_id, yearId, semester)
+    }
+
+    for (const student of students) {
+      // Subject averages
+      const subjectAvgs = db.prepare(`
+        SELECT sa.*, sub.name AS subject_name, sub.short_code
+        FROM subject_averages sa
+        JOIN subjects sub ON sub.id = sa.subject_id
+        WHERE sa.student_id = ? AND sa.classroom_id = ? AND sa.academic_year_id = ? AND sa.semester = ?
+        ORDER BY sub.name
+      `).all(student.id, classroom_id, yearId, semester)
+
+      // Semester summary
+      const summary = db.prepare(`
+        SELECT * FROM semester_summaries
+        WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?
+      `).get(student.id, classroom_id, yearId, semester)
+
+      // Decisions
+      const decision = db.prepare(`
+        SELECT * FROM semester_decisions
+        WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?
+      `).get(student.id, classroom_id, yearId, semester)
+
+      // Cross-semester summaries (for the bilan table)
+      const crossSemesters = []
+      for (let s = 1; s <= periodeCount; s++) {
+        const ss = db.prepare(`
+          SELECT semester_average, class_rank, class_size, class_highest_average, class_lowest_average
+          FROM semester_summaries
+          WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?
+        `).get(student.id, classroom_id, yearId, s)
+        crossSemesters.push(ss || null)
+      }
+
+      // Compute totals for the bulletin
+      let totalCoef = 0, totalMoyCoef = 0
+      subjectAvgs.forEach(sa => {
+        if (sa.raw_average !== null) {
+          totalCoef += sa.coefficient
+          totalMoyCoef += sa.weighted_average || 0
+        }
+      })
+
+      const snapshot = {
+        school: {
+          name: config?.school_name || '',
+          section_name: sectionName,
+          director: config?.director_name || '',
+          logo_path: logoPath,
+        },
+        academic_year: year?.label || '',
+        semester: parseInt(semester),
+        classroom: { label: classroom?.label, level: classroom?.level_name },
+        class_size: classSize,
+        student: {
+          full_name: student.full_name,
+          matricule: student.matricule,
+          gender: student.gender,
+        },
+        subjects: subjectAvgs.map(sa => ({
+          name: sa.subject_name,
+          short_code: sa.short_code,
+          raw_average: sa.raw_average,
+          coefficient: sa.coefficient,
+          weighted_average: sa.weighted_average,
+          rank: sa.subject_rank,
+          class_highest: sa.class_highest_score,
+          class_lowest: sa.class_lowest_score,
+          class_average: sa.class_subject_average,
+        })),
+        totals: { total_coefficients: totalCoef, total_weighted_points: totalMoyCoef },
+        summary: summary ? {
+          semester_average: summary.semester_average,
+          class_rank: summary.class_rank,
+          class_size: summary.class_size,
+          mention: summary.mention,
+          class_highest: summary.class_highest_average,
+          class_lowest: summary.class_lowest_average,
+          class_overall: summary.class_overall_average,
+        } : null,
+        cross_semesters: crossSemesters.map((cs, i) => cs ? {
+          semester: i + 1,
+          average: cs.semester_average,
+          rank: cs.class_rank,
+          class_size: cs.class_size,
+          highest: cs.class_highest_average,
+          lowest: cs.class_lowest_average,
+        } : { semester: i + 1, average: null, rank: null, class_size: null, highest: null, lowest: null }),
+        decision: decision ? {
+          conduite_score: decision.conduite_score,
+          avertissement: decision.avertissement === 1,
+          blame: decision.blame === 1,
+          exclusion_temporaire: decision.exclusion_temporaire === 1,
+          felicitation: decision.felicitation === 1,
+          encouragement: decision.encouragement === 1,
+          tableau_honneur: decision.tableau_honneur === 1,
+          conseil_decision: decision.conseil_decision,
+        } : null,
+      }
+
+      db.prepare(`
+        INSERT INTO report_card_snapshots (snapshot_uid, student_id, classroom_id, academic_year_id, semester, snapshot_data, generated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(generateUUID(), student.id, classroom_id, yearId, semester, JSON.stringify(snapshot), req.user.id)
+
+      generated++
+    }
+  })()
+
+  return res.json({ success: true, generated })
+})
+
+// ─── GET /api/report-cards/view/:snapshotId — Single report card data ─
+router.get('/view/:snapshotId', requirePermission('reports.view'), (req, res) => {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM report_card_snapshots WHERE id = ?').get(req.params.snapshotId)
+  if (!row) return res.status(404).json({ error: 'NOT_FOUND' })
+
+  let snapshot
+  try { snapshot = JSON.parse(row.snapshot_data) } catch { return res.status(500).json({ error: 'PARSE_ERROR' }) }
+
+  return res.json({ snapshot, generated_at: row.generated_at })
+})
+
+module.exports = router

@@ -27,6 +27,13 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', require('./routes/auth'))
 app.use('/api/activation', require('./routes/activation'))
 app.use('/api/onboarding', require('./routes/onboarding'))
+app.use('/api/students', require('./routes/students'))
+app.use('/api/classrooms', require('./routes/classrooms'))
+app.use('/api/teachers', require('./routes/teachers'))
+app.use('/api/settings', require('./routes/settings'))
+app.use('/api/grades', require('./routes/grades'))
+app.use('/api/decisions', require('./routes/decisions'))
+app.use('/api/report-cards', require('./routes/reportcards'))
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER] ScolaDesk running on port ${PORT}`)
