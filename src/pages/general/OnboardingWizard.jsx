@@ -348,6 +348,38 @@ function Step4Levels({ onNext }) {
 // ─── Step 5: Series Configuration ────────────────────────────
 const COMMON_SERIES = ['A', 'B', 'C', 'D', 'E', 'F1', 'F2', 'F3', 'G1', 'G2']
 
+function SerieSelector({ level, selected, onToggle, onAdd }) {
+  const [custom, setCustom] = useState('')
+
+  function handleAdd() {
+    const val = custom.trim().toUpperCase()
+    if (!val) return
+    onAdd(val)
+    setCustom('')
+  }
+
+  const allOptions = [...new Set([...COMMON_SERIES, ...selected])]
+
+  return (
+    <div className="bg-white rounded-xl border border-steel-200 p-5">
+      <p className="text-sm font-medium text-steel-700 mb-3">{level.name}</p>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {allOptions.map(s => (
+          <button key={s} type="button" onClick={() => onToggle(s)}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${selected.includes(s) ? 'border-brand bg-brand-50 text-brand-600' : 'border-steel-200 text-steel-400 hover:border-steel-300'}`}>{s}</button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input type="text" value={custom} onChange={e => setCustom(e.target.value.toUpperCase())} placeholder="Ajouter (ex: A1, A2...)"
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd() } }}
+          className="flex-1 px-3 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand uppercase" />
+        <button type="button" onClick={handleAdd} disabled={!custom.trim()}
+          className="px-3 py-1.5 border border-steel-200 text-steel-600 rounded-lg text-xs font-medium hover:bg-steel-50 disabled:opacity-30">+</button>
+      </div>
+    </div>
+  )
+}
+
 function Step5Series({ onNext }) {
   const [levels, setLevels] = useState([])
   const [seriesMap, setSeriesMap] = useState({})
@@ -403,15 +435,18 @@ function Step5Series({ onNext }) {
       <p className="text-sm text-steel-500 mb-6">Sélectionnez les séries proposées pour chaque niveau.</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         {levels.map(level => (
-          <div key={level.id} className="bg-white rounded-xl border border-steel-200 p-5">
-            <p className="text-sm font-medium text-steel-700 mb-3">{level.name}</p>
-            <div className="flex flex-wrap gap-2">
-              {COMMON_SERIES.map(s => (
-                <button key={s} type="button" onClick={() => toggleSerie(level.id, s)}
-                  className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${(seriesMap[level.id] || []).includes(s) ? 'border-brand bg-brand-50 text-brand-600' : 'border-steel-200 text-steel-400 hover:border-steel-300'}`}>{s}</button>
-              ))}
-            </div>
-          </div>
+          <SerieSelector key={level.id} level={level} selected={seriesMap[level.id] || []}
+            onToggle={(name) => toggleSerie(level.id, name)}
+            onAdd={(name) => {
+              const upper = name.trim().toUpperCase()
+              if (!upper) return
+              setSeriesMap(prev => {
+                const current = prev[level.id] || []
+                if (current.includes(upper)) return prev
+                return { ...prev, [level.id]: [...current, upper] }
+              })
+            }}
+          />
         ))}
         {error && <p className="text-red-500 text-sm">{error}</p>}
         <div className="flex justify-end">
@@ -425,11 +460,57 @@ function Step5Series({ onNext }) {
 }
 
 // ─── Step 6: Subjects & Coefficients ─────────────────────────
+function AddSubjectInline({ subjects, onAdded }) {
+  const [name, setName] = useState('')
+  const [code, setCode] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function handleAdd(e) {
+    e.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed) return
+    if (subjects.some(s => s.name.toLowerCase() === trimmed.toLowerCase())) {
+      setError('Cette matière existe déjà')
+      return
+    }
+    setError(''); setSaving(true)
+    try {
+      const res = await api.post('/api/settings/subjects', { name: trimmed, short_code: code.trim().toUpperCase() || null })
+      onAdded({ id: res.data.subject_id, name: trimmed, short_code: code.trim().toUpperCase() || null })
+      setName(''); setCode('')
+    } catch (err) { setError(err.response?.data?.message || 'Erreur') }
+    setSaving(false)
+  }
+
+  return (
+    <div className="mb-3 pb-3 border-b border-steel-100">
+      <form onSubmit={handleAdd} className="flex gap-2 items-end">
+        <div className="flex-1">
+          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ajouter une matière..."
+            className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+        </div>
+        <div className="w-20">
+          <input type="text" value={code} onChange={e => setCode(e.target.value)} placeholder="Code"
+            className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand uppercase" />
+        </div>
+        <button type="submit" disabled={saving || !name.trim()}
+          className="px-3 py-1.5 border border-brand text-brand rounded-lg text-xs font-medium hover:bg-brand-50 disabled:opacity-30">
+          {saving ? '...' : '+'}
+        </button>
+      </form>
+      {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+    </div>
+  )
+}
+
 function Step6Subjects({ onNext }) {
   const [subjects, setSubjects] = useState([])
   const [levels, setLevels] = useState([])
+  const [series, setSeries] = useState([])
   const [assignments, setAssignments] = useState([])
   const [selectedLevel, setSelectedLevel] = useState(null)
+  const [selectedSerie, setSelectedSerie] = useState(null) // null = no serie (level without series)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -438,24 +519,43 @@ function Step6Subjects({ onNext }) {
     api.get('/api/onboarding/subjects-data').then(res => {
       setSubjects(res.data.subjects || [])
       setLevels(res.data.levels || [])
+      setSeries(res.data.series || [])
       setAssignments(res.data.existing_assignments || [])
-      if (res.data.levels?.length > 0) setSelectedLevel(res.data.levels[0].id)
+      if (res.data.levels?.length > 0) {
+        const first = res.data.levels[0]
+        setSelectedLevel(first.id)
+        const firstSeries = (res.data.series || []).filter(s => s.level_id === first.id)
+        setSelectedSerie(firstSeries.length > 0 ? firstSeries[0].id : null)
+      }
       setLoading(false)
     })
   }, [])
 
-  function getAssignment(levelId, subjectId) {
-    return assignments.find(a => a.level_id === levelId && a.subject_id === subjectId && !a.serie_id)
+  function selectLevel(levelId) {
+    setSelectedLevel(levelId)
+    const level = levels.find(l => l.id === levelId)
+    const levelSeries = series.filter(s => s.level_id === levelId)
+    setSelectedSerie(level?.has_serie === 1 && levelSeries.length > 0 ? levelSeries[0].id : null)
   }
-  function toggleSubject(levelId, subjectId) {
-    if (getAssignment(levelId, subjectId)) {
-      setAssignments(prev => prev.filter(a => !(a.level_id === levelId && a.subject_id === subjectId && !a.serie_id)))
+
+  function getAssignment(levelId, subjectId, serieId) {
+    return assignments.find(a => a.level_id === levelId && a.subject_id === subjectId && (a.serie_id || null) === (serieId || null))
+  }
+
+  function toggleSubject(levelId, subjectId, serieId) {
+    const existing = getAssignment(levelId, subjectId, serieId)
+    if (existing) {
+      setAssignments(prev => prev.filter(a => !(a.level_id === levelId && a.subject_id === subjectId && (a.serie_id || null) === (serieId || null))))
     } else {
-      setAssignments(prev => [...prev, { level_id: levelId, subject_id: subjectId, serie_id: null, coefficient: 1 }])
+      setAssignments(prev => [...prev, { level_id: levelId, subject_id: subjectId, serie_id: serieId || null, coefficient: 1 }])
     }
   }
-  function setCoefficient(levelId, subjectId, coeff) {
-    setAssignments(prev => prev.map(a => (a.level_id === levelId && a.subject_id === subjectId && !a.serie_id) ? { ...a, coefficient: parseInt(coeff) || 1 } : a))
+
+  function setCoefficient(levelId, subjectId, serieId, coeff) {
+    setAssignments(prev => prev.map(a =>
+      (a.level_id === levelId && a.subject_id === subjectId && (a.serie_id || null) === (serieId || null))
+        ? { ...a, coefficient: parseInt(coeff) || 1 } : a
+    ))
   }
 
   async function handleSubmit(e) {
@@ -468,32 +568,66 @@ function Step6Subjects({ onNext }) {
 
   if (loading) return <div className="text-center py-8"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin mx-auto" /></div>
 
+  const currentLevel = levels.find(l => l.id === selectedLevel)
+  const levelSeries = series.filter(s => s.level_id === selectedLevel)
+  const hasSeries = currentLevel?.has_serie === 1 && levelSeries.length > 0
+  const activeSerieId = hasSeries ? selectedSerie : null
+
   return (
     <div className="max-w-2xl mx-auto">
       <h2 className="text-lg font-medium text-steel-900 mb-1">Matières et coefficients</h2>
-      <p className="text-sm text-steel-500 mb-6">Assignez les matières à chaque niveau avec leurs coefficients.</p>
+      <p className="text-sm text-steel-500 mb-6">
+        Assignez les matières à chaque niveau. {hasSeries ? 'Pour les niveaux avec séries, configurez chaque série séparément.' : ''}
+      </p>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Level tabs */}
         <div className="flex gap-2 flex-wrap">
           {levels.map(l => {
             const count = assignments.filter(a => a.level_id === l.id).length
             return (
-              <button key={l.id} type="button" onClick={() => setSelectedLevel(l.id)}
+              <button key={l.id} type="button" onClick={() => selectLevel(l.id)}
                 className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${selectedLevel === l.id ? 'bg-brand text-white' : 'bg-white border border-steel-200 text-steel-600 hover:bg-steel-50'}`}>
                 {l.name} {count > 0 && <span className="ml-1 opacity-70">({count})</span>}
               </button>
             )
           })}
         </div>
+
+        {/* Serie tabs (only for levels with series) */}
+        {hasSeries && (
+          <div className="flex gap-1 border-b border-steel-200">
+            {levelSeries.map(s => {
+              const count = assignments.filter(a => a.level_id === selectedLevel && a.serie_id === s.id).length
+              return (
+                <button key={s.id} type="button" onClick={() => setSelectedSerie(s.id)}
+                  className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${selectedSerie === s.id ? 'border-brand text-brand' : 'border-transparent text-steel-500 hover:text-steel-700'}`}>
+                  Série {s.name} {count > 0 && <span className="opacity-70">({count})</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Subject list */}
         {selectedLevel && (
           <div className="bg-white rounded-xl border border-steel-200 p-5">
-            <p className="text-sm font-medium text-steel-700 mb-3">{levels.find(l => l.id === selectedLevel)?.name}</p>
+            <p className="text-sm font-medium text-steel-700 mb-1">
+              {currentLevel?.name}
+              {hasSeries && selectedSerie && <span className="text-brand ml-1">— Série {levelSeries.find(s => s.id === selectedSerie)?.name}</span>}
+            </p>
+            {hasSeries && (
+              <p className="text-xs text-steel-400 mb-3">Chaque série a ses propres matières et coefficients.</p>
+            )}
+            <AddSubjectInline subjects={subjects} onAdded={(newSub) => {
+              setSubjects(prev => [...prev, newSub].sort((a, b) => a.name.localeCompare(b.name)))
+            }} />
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {subjects.map(sub => {
-                const assigned = getAssignment(selectedLevel, sub.id)
+                const assigned = getAssignment(selectedLevel, sub.id, activeSerieId)
                 return (
                   <div key={sub.id} className="flex items-center gap-3 py-1.5 border-b border-steel-50">
                     <label className="flex items-center gap-2 flex-1 cursor-pointer">
-                      <input type="checkbox" checked={!!assigned} onChange={() => toggleSubject(selectedLevel, sub.id)}
+                      <input type="checkbox" checked={!!assigned} onChange={() => toggleSubject(selectedLevel, sub.id, activeSerieId)}
                         className="rounded border-steel-300 text-brand focus:ring-brand" />
                       <span className="text-sm text-steel-700">{sub.name}</span>
                       <span className="text-xs text-steel-400">{sub.short_code}</span>
@@ -501,9 +635,9 @@ function Step6Subjects({ onNext }) {
                     {assigned && (
                       <div className="flex items-center gap-1">
                         <span className="text-xs text-steel-400">Coeff:</span>
-                        <select value={assigned.coefficient} onChange={e => setCoefficient(selectedLevel, sub.id, e.target.value)}
+                        <select value={assigned.coefficient} onChange={e => setCoefficient(selectedLevel, sub.id, activeSerieId, e.target.value)}
                           className="w-14 px-1 py-0.5 border border-steel-200 rounded text-xs text-center focus:outline-none focus:border-brand bg-white">
-                          {[1,2,3,4,5,6].map(c => <option key={c} value={c}>{c}</option>)}
+                          {[1,2,3,4,5,6,7,8].map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
                     )}

@@ -49,18 +49,32 @@ router.get('/selectors', requirePermission('grades.view'), (req, res) => {
 })
 
 // ─── GET /api/grades/subjects/:classroomId — Subjects for a classroom ─
+// Respects serie_id: shows subjects for the classroom's serie, or common subjects (serie_id IS NULL)
 router.get('/subjects/:classroomId', requirePermission('grades.view'), (req, res) => {
   const db = getDb()
-  const classroom = db.prepare('SELECT level_id FROM classrooms WHERE id = ?').get(req.params.classroomId)
+  const classroom = db.prepare('SELECT level_id, serie_id FROM classrooms WHERE id = ?').get(req.params.classroomId)
   if (!classroom) return res.status(404).json({ error: 'NOT_FOUND' })
 
-  const subjects = db.prepare(`
-    SELECT ls.subject_id, s.name AS subject_name, s.short_code, ls.coefficient
-    FROM level_subjects ls
-    JOIN subjects s ON s.id = ls.subject_id
-    WHERE ls.level_id = ? AND ls.is_active = 1
-    ORDER BY s.name
-  `).all(classroom.level_id)
+  let subjects
+  if (classroom.serie_id) {
+    // Level with serie: get serie-specific subjects + common subjects (serie_id IS NULL)
+    subjects = db.prepare(`
+      SELECT ls.subject_id, s.name AS subject_name, s.short_code, ls.coefficient
+      FROM level_subjects ls
+      JOIN subjects s ON s.id = ls.subject_id
+      WHERE ls.level_id = ? AND ls.is_active = 1 AND (ls.serie_id = ? OR ls.serie_id IS NULL)
+      ORDER BY s.name
+    `).all(classroom.level_id, classroom.serie_id)
+  } else {
+    // Level without serie: get subjects with serie_id IS NULL
+    subjects = db.prepare(`
+      SELECT ls.subject_id, s.name AS subject_name, s.short_code, ls.coefficient
+      FROM level_subjects ls
+      JOIN subjects s ON s.id = ls.subject_id
+      WHERE ls.level_id = ? AND ls.is_active = 1 AND ls.serie_id IS NULL
+      ORDER BY s.name
+    `).all(classroom.level_id)
+  }
 
   return res.json({ subjects })
 })
@@ -101,9 +115,14 @@ router.get('/:classroomId/:subjectId/:semester', requirePermission('grades.view'
   const scoreMap = {}
   scoreRows.forEach(s => { scoreMap[`${s.template_id}_${s.student_id}`] = s })
 
-  // Get coefficient
-  const classroom = db.prepare('SELECT level_id FROM classrooms WHERE id = ?').get(classroomId)
-  const levelSubject = db.prepare('SELECT coefficient FROM level_subjects WHERE level_id = ? AND subject_id = ? AND is_active = 1').get(classroom?.level_id, subjectId)
+  // Get coefficient (respect serie_id)
+  const classroom = db.prepare('SELECT level_id, serie_id FROM classrooms WHERE id = ?').get(classroomId)
+  let levelSubject
+  if (classroom?.serie_id) {
+    levelSubject = db.prepare('SELECT coefficient FROM level_subjects WHERE level_id = ? AND subject_id = ? AND is_active = 1 AND (serie_id = ? OR serie_id IS NULL) ORDER BY serie_id DESC LIMIT 1').get(classroom.level_id, subjectId, classroom.serie_id)
+  } else {
+    levelSubject = db.prepare('SELECT coefficient FROM level_subjects WHERE level_id = ? AND subject_id = ? AND is_active = 1 AND serie_id IS NULL').get(classroom?.level_id, subjectId)
+  }
   const coefficient = levelSubject?.coefficient || 1
 
   // Build rows with computed columns
@@ -218,7 +237,7 @@ router.post('/compute/:classroomId/:semester', requirePermission('grades.edit'),
   const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
   const scale = getAppreciationScale(db)
 
-  const classroom = db.prepare('SELECT level_id FROM classrooms WHERE id = ? AND is_deleted = 0').get(classroomId)
+  const classroom = db.prepare('SELECT level_id, serie_id FROM classrooms WHERE id = ? AND is_deleted = 0').get(classroomId)
   if (!classroom) return res.status(404).json({ error: 'NOT_FOUND' })
 
   const students = db.prepare(`
@@ -227,7 +246,9 @@ router.post('/compute/:classroomId/:semester', requirePermission('grades.edit'),
     WHERE s.is_deleted = 0
   `).all(classroomId)
 
-  const levelSubjects = db.prepare('SELECT subject_id, coefficient FROM level_subjects WHERE level_id = ? AND is_active = 1').all(classroom.level_id)
+  const levelSubjects = classroom.serie_id
+    ? db.prepare('SELECT subject_id, coefficient FROM level_subjects WHERE level_id = ? AND is_active = 1 AND (serie_id = ? OR serie_id IS NULL)').all(classroom.level_id, classroom.serie_id)
+    : db.prepare('SELECT subject_id, coefficient FROM level_subjects WHERE level_id = ? AND is_active = 1 AND serie_id IS NULL').all(classroom.level_id)
 
   const classSize = students.length
 

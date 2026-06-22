@@ -308,9 +308,20 @@ router.post('/step4', requireStep(4), (req, res) => {
 
     const db = getDb()
     db.transaction(() => {
+      // Get currently active levels before change
+      const wasActive = db.prepare('SELECT id FROM levels WHERE is_active = 1').all().map(r => r.id)
+
       db.prepare('UPDATE levels SET is_active = 0').run()
       const stmt = db.prepare('UPDATE levels SET is_active = 1 WHERE id = ?')
       for (const id of level_ids) { stmt.run(id) }
+
+      // Clean up series and level_subjects for levels that were just deactivated
+      const removed = wasActive.filter(id => !level_ids.includes(id))
+      if (removed.length > 0) {
+        const delSeries = db.prepare('DELETE FROM series WHERE level_id = ?')
+        const delLS = db.prepare('DELETE FROM level_subjects WHERE level_id = ?')
+        for (const id of removed) { delSeries.run(id); delLS.run(id) }
+      }
     })()
 
     db.prepare(`
@@ -355,9 +366,35 @@ router.post('/step5', requireStep(5), (req, res) => {
     }
 
     db.transaction(() => {
-      const stmt = db.prepare('INSERT OR IGNORE INTO series (name, level_id) VALUES (?, ?)')
+      // Build desired set of series names per level from the payload
+      const desiredByLevel = {}
       for (const s of series) {
-        if (s.name && s.level_id) stmt.run(s.name.trim().toUpperCase(), s.level_id)
+        if (!s.name || !s.level_id) continue
+        if (!desiredByLevel[s.level_id]) desiredByLevel[s.level_id] = new Set()
+        desiredByLevel[s.level_id].add(s.name.trim().toUpperCase())
+      }
+
+      const insStmt = db.prepare('INSERT OR IGNORE INTO series (name, level_id) VALUES (?, ?)')
+      const delLS = db.prepare('DELETE FROM level_subjects WHERE serie_id = ?')
+      const delSerie = db.prepare('DELETE FROM series WHERE id = ?')
+
+      // Sync each active level-with-serie to the desired set
+      for (const level of activeLevelsWithSerie) {
+        const desired = desiredByLevel[level.id] || new Set()
+        const existing = db.prepare('SELECT id, name FROM series WHERE level_id = ?').all(level.id)
+
+        // Remove series no longer selected (clean orphaned subject assignments first)
+        for (const ex of existing) {
+          if (!desired.has(ex.name)) {
+            delLS.run(ex.id)
+            delSerie.run(ex.id)
+          }
+        }
+
+        // Add newly selected series
+        for (const name of desired) {
+          insStmt.run(name, level.id)
+        }
       }
     })()
 
@@ -585,7 +622,9 @@ router.post('/step8', requireStep(8), (req, res) => {
           .get(`assessment_config_${c.level_id}`)
         const assessConfig = configRow ? JSON.parse(configRow.value) : { interrogations: 4, devoirs: 1, compositions: 1, max_score: 20 }
 
-        const subjects = db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1').all(c.level_id)
+        const subjects = c.serie_id
+          ? db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1 AND (serie_id = ? OR serie_id IS NULL)').all(c.level_id, c.serie_id)
+          : db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1 AND serie_id IS NULL').all(c.level_id)
 
         for (const sub of subjects) {
           for (let sem = 1; sem <= periodeCount; sem++) {

@@ -206,4 +206,104 @@ router.delete('/teacher-assignment/:id', requirePermission('students.edit'), (re
   return res.json({ success: true })
 })
 
+// ═══════════════════════════════════════════════════════════════
+// POST-ONBOARDING MANAGEMENT (levels, classrooms, subjects, series)
+// ═══════════════════════════════════════════════════════════════
+
+// ─── PUT /api/settings/levels — Toggle level activation ──────
+router.put('/levels', requirePermission('students.edit'), (req, res) => {
+  const { level_ids } = req.body
+  if (!level_ids || !Array.isArray(level_ids)) return res.status(400).json({ error: 'INVALID' })
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare('UPDATE levels SET is_active = 0').run()
+    const stmt = db.prepare('UPDATE levels SET is_active = 1 WHERE id = ?')
+    for (const id of level_ids) stmt.run(id)
+  })()
+  return res.json({ success: true })
+})
+
+// ─── GET /api/settings/levels — All levels with active state ─
+router.get('/levels', requirePermission('students.view'), (req, res) => {
+  const db = getDb()
+  const levels = db.prepare('SELECT * FROM levels ORDER BY display_order').all()
+  return res.json({ levels })
+})
+
+// ─── POST /api/settings/classrooms — Add classroom mid-year ──
+router.post('/classrooms', requirePermission('students.edit'), (req, res) => {
+  const { label, level_id, serie_id, capacity } = req.body
+  if (!label?.trim() || !level_id) return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Nom et niveau requis' })
+  const db = getDb()
+  const { generateUUID } = require('../utils/uid')
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  if (!yearId) return res.status(400).json({ error: 'NO_YEAR' })
+
+  const existing = db.prepare('SELECT id FROM classrooms WHERE label = ? AND academic_year_id = ? AND is_deleted = 0').get(label.trim(), yearId)
+  if (existing) return res.status(409).json({ error: 'DUPLICATE', message: 'Une classe avec ce nom existe déjà' })
+
+  const result = db.prepare('INSERT INTO classrooms (classroom_uid, label, level_id, serie_id, academic_year_id, capacity) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(generateUUID(), label.trim(), level_id, serie_id || null, parseInt(yearId), capacity || 50)
+
+  // Auto-generate assessment templates
+  const classroomId = result.lastInsertRowid
+  const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
+  const configRow = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(`assessment_config_${level_id}`)
+  const assessConfig = configRow ? JSON.parse(configRow.value) : { interrogations: 4, devoirs: 1, compositions: 1, max_score: 20 }
+
+  const subjects = serie_id
+    ? db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1 AND (serie_id = ? OR serie_id IS NULL)').all(level_id, serie_id)
+    : db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1 AND serie_id IS NULL').all(level_id)
+
+  const tStmt = db.prepare('INSERT OR IGNORE INTO assessment_templates (classroom_id, subject_id, academic_year_id, semester, assessment_type, sequence_number, max_score, weight) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+  db.transaction(() => {
+    for (const sub of subjects) {
+      for (let sem = 1; sem <= periodeCount; sem++) {
+        for (let i = 1; i <= assessConfig.interrogations; i++) tStmt.run(classroomId, sub.subject_id, parseInt(yearId), sem, 'interrogation', i, assessConfig.max_score, 1)
+        for (let i = 1; i <= assessConfig.devoirs; i++) tStmt.run(classroomId, sub.subject_id, parseInt(yearId), sem, 'devoir', i, assessConfig.max_score, 1)
+        for (let i = 1; i <= assessConfig.compositions; i++) tStmt.run(classroomId, sub.subject_id, parseInt(yearId), sem, 'composition', i, assessConfig.max_score, 2)
+      }
+    }
+  })()
+
+  return res.status(201).json({ success: true, classroom_id: classroomId })
+})
+
+// ─── POST /api/settings/subjects — Add new subject ───────────
+router.post('/subjects', requirePermission('students.edit'), (req, res) => {
+  const { name, short_code } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Nom requis' })
+  const db = getDb()
+  const existing = db.prepare('SELECT id FROM subjects WHERE name = ?').get(name.trim())
+  if (existing) return res.status(409).json({ error: 'DUPLICATE', message: 'Cette matière existe déjà' })
+  const result = db.prepare('INSERT INTO subjects (name, short_code) VALUES (?, ?)').run(name.trim(), short_code?.trim() || null)
+  return res.status(201).json({ success: true, subject_id: result.lastInsertRowid })
+})
+
+// ─── POST /api/settings/level-subject — Add subject to level ─
+router.post('/level-subject', requirePermission('students.edit'), (req, res) => {
+  const { level_id, serie_id, subject_id, coefficient } = req.body
+  if (!level_id || !subject_id) return res.status(400).json({ error: 'MISSING_FIELDS' })
+  const db = getDb()
+  db.prepare('INSERT OR REPLACE INTO level_subjects (level_id, serie_id, subject_id, coefficient, is_active) VALUES (?, ?, ?, ?, 1)')
+    .run(level_id, serie_id || null, subject_id, coefficient || 1)
+  return res.json({ success: true })
+})
+
+// ─── DELETE /api/settings/level-subject/:id — Remove subject from level ─
+router.delete('/level-subject/:id', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  db.prepare('UPDATE level_subjects SET is_active = 0 WHERE id = ?').run(req.params.id)
+  return res.json({ success: true })
+})
+
+// ─── POST /api/settings/series — Add serie to level ──────────
+router.post('/series', requirePermission('students.edit'), (req, res) => {
+  const { name, level_id } = req.body
+  if (!name?.trim() || !level_id) return res.status(400).json({ error: 'MISSING_FIELDS' })
+  const db = getDb()
+  db.prepare('INSERT OR IGNORE INTO series (name, level_id) VALUES (?, ?)').run(name.trim().toUpperCase(), level_id)
+  return res.json({ success: true })
+})
+
 module.exports = router
