@@ -16,7 +16,10 @@ export default function GradesPage() {
   const [coefficient, setCoefficient] = useState(1)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState(null)
   const pendingRef = useRef([])
+  const fileRef = useRef(null)
 
   // Load selectors
   useEffect(() => {
@@ -64,6 +67,34 @@ export default function GradesPage() {
       setSaving(false)
       loadGrades()
     }, 300)
+  }
+
+  async function downloadTemplate() {
+    const res = await api.get(`/api/grades/template/${classroomId}/${subjectId}/${semester}`, { responseType: 'blob' })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    const cls = classrooms.find(c => String(c.id) === String(classroomId))?.label || 'classe'
+    const sub = subjects.find(s => String(s.subject_id) === String(subjectId))?.subject_name || 'matiere'
+    a.href = url
+    a.download = `${cls}_${sub}_T${semester}.xlsx`.replace(/\s/g, '_')
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function uploadFile(file) {
+    if (!file) return
+    setImporting(true); setImportResult(null)
+    try {
+      const res = await api.post(`/api/grades/upload/${classroomId}/${subjectId}/${semester}`, file, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      })
+      setImportResult(res.data)
+      loadGrades()
+    } catch (err) {
+      setImportResult({ error: err.response?.data?.message || 'Erreur lors de l\'import' })
+    }
+    setImporting(false)
+    if (fileRef.current) fileRef.current.value = ''
   }
 
   function updateLocalScore(studentId, templateId, value, isAbsent) {
@@ -120,7 +151,46 @@ export default function GradesPage() {
           <option value="">— Matière —</option>
           {subjects.map(s => <option key={s.subject_id} value={s.subject_id}>{s.subject_name} (coef {s.coefficient})</option>)}
         </select>
+
+        {classroomId && subjectId && (
+          <div className="flex gap-2 ml-auto">
+            <button onClick={downloadTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              Modèle Excel
+            </button>
+            <button onClick={() => fileRef.current?.click()} disabled={importing}
+              className="flex items-center gap-1.5 px-3 py-2 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+              {importing ? 'Import...' : 'Importer'}
+            </button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
+              onChange={e => uploadFile(e.target.files?.[0])} />
+          </div>
+        )}
       </div>
+
+      {/* Import result */}
+      {importResult && (
+        <div className={`rounded-lg p-3 mb-4 text-sm flex items-start justify-between gap-3 ${importResult.error ? 'bg-red-50 border border-red-200' : 'bg-brand-50 border border-brand-100'}`}>
+          <div>
+            {importResult.error ? (
+              <p className="text-red-600">{importResult.error}</p>
+            ) : (
+              <>
+                <p className="text-brand-700 font-medium">{importResult.saved} note(s) importée(s) · {importResult.matched}/{importResult.total_rows} élève(s) reconnu(s)</p>
+                {importResult.errors?.length > 0 && (
+                  <ul className="mt-1 text-xs text-red-600 space-y-0.5 max-h-32 overflow-y-auto">
+                    {importResult.errors.slice(0, 20).map((e, i) => <li key={i}>Ligne {e.row}: {e.message}</li>)}
+                    {importResult.errors.length > 20 && <li>… et {importResult.errors.length - 20} autre(s)</li>}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
+          <button onClick={() => setImportResult(null)} className="text-steel-400 hover:text-steel-600 text-xs shrink-0">✕</button>
+        </div>
+      )}
 
       {/* Progress */}
       {classStats && (

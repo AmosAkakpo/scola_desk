@@ -29,6 +29,11 @@ export default function TeacherDetailPage() {
     fetchData()
   }
 
+  async function toggleActive() {
+    await api.patch(`/api/teachers/${id}/toggle-active`)
+    fetchData()
+  }
+
   if (loading) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin" /></div>
   if (!teacher) return <p className="text-steel-500 py-20 text-center">Enseignant introuvable</p>
 
@@ -40,12 +45,20 @@ export default function TeacherDetailPage() {
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
           Retour aux enseignants
         </button>
-        <h1 className="text-xl font-medium text-steel-900">{teacher.full_name}</h1>
-        <div className="flex items-center gap-3 mt-1">
-          {teacher.matricule && <span className="text-sm font-mono text-brand-600">{teacher.matricule}</span>}
-          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${teacher.is_active === 1 ? 'bg-brand-50 text-brand-600' : 'bg-steel-100 text-steel-500'}`}>
-            {teacher.is_active === 1 ? 'Actif' : 'Inactif'}
-          </span>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-medium text-steel-900">{teacher.full_name}</h1>
+            <div className="flex items-center gap-3 mt-1">
+              {teacher.matricule && <span className="text-sm font-mono text-brand-600">{teacher.matricule}</span>}
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${teacher.is_active === 1 ? 'bg-brand-50 text-brand-600' : 'bg-steel-100 text-steel-500'}`}>
+                {teacher.is_active === 1 ? 'Actif' : 'Inactif'}
+              </span>
+            </div>
+          </div>
+          <button onClick={toggleActive}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${teacher.is_active === 1 ? 'border-red-200 text-red-600 hover:bg-red-50' : 'border-brand-200 text-brand-600 hover:bg-brand-50'}`}>
+            {teacher.is_active === 1 ? 'Désactiver' : 'Réactiver'}
+          </button>
         </div>
       </div>
 
@@ -54,7 +67,7 @@ export default function TeacherDetailPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xs font-semibold text-steel-400 uppercase tracking-wide">Informations</h2>
           {!editing ? (
-            <button onClick={() => { setEditing(true); setEditForm({ full_name: teacher.full_name, phone: teacher.phone || '', email: teacher.email || '' }) }}
+            <button onClick={() => { setEditing(true); setEditForm({ full_name: teacher.full_name, phone: teacher.phone || '', email: teacher.email || '', qualification: teacher.qualification || '' }) }}
               className="text-xs text-brand hover:text-brand-600 font-medium">Modifier</button>
           ) : (
             <div className="flex gap-2">
@@ -68,6 +81,9 @@ export default function TeacherDetailPage() {
             <div><p className="text-steel-400 text-xs">Nom complet</p><p className="text-steel-800 font-medium">{teacher.full_name}</p></div>
             <div><p className="text-steel-400 text-xs">Téléphone</p><p className="text-steel-800">{teacher.phone || '—'}</p></div>
             <div><p className="text-steel-400 text-xs">Email</p><p className="text-steel-800">{teacher.email || '—'}</p></div>
+            <div><p className="text-steel-400 text-xs">Sexe</p><p className="text-steel-800">{teacher.gender === 'M' ? 'Masculin' : teacher.gender === 'F' ? 'Féminin' : '—'}</p></div>
+            <div><p className="text-steel-400 text-xs">Qualification</p><p className="text-steel-800">{teacher.qualification || '—'}</p></div>
+            <div><p className="text-steel-400 text-xs">Matière de spécialité</p><p className="text-steel-800">{teacher.specialty_name || '—'}</p></div>
           </div>
         ) : (
           <form onSubmit={saveEdit} className="grid grid-cols-3 gap-3">
@@ -84,6 +100,12 @@ export default function TeacherDetailPage() {
             <div>
               <label className="block text-xs text-steel-500 mb-1">Email</label>
               <input type="email" value={editForm.email || ''} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
+                className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
+            </div>
+            <div className="col-span-3">
+              <label className="block text-xs text-steel-500 mb-1">Qualification</label>
+              <input type="text" value={editForm.qualification || ''} onChange={e => setEditForm(p => ({ ...p, qualification: e.target.value }))}
+                placeholder="Ex: CAPES, Licence en Mathématiques..."
                 className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
             </div>
           </form>

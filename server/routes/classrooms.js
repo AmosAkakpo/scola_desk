@@ -1,6 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const { getDb } = require('../db/init')
+const { generateUUID } = require('../utils/uid')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
 
@@ -63,6 +64,54 @@ router.put('/:id', requirePermission('students.edit'), (req, res) => {
   if (capacity !== undefined) db.prepare('UPDATE classrooms SET capacity = ?, updated_at = datetime(\'now\') WHERE id = ?').run(capacity, req.params.id)
 
   return res.json({ success: true })
+})
+
+// ─── POST /api/classrooms — Create new classroom ───────────
+router.post('/', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  const { label, level_id, serie_id, capacity } = req.body
+  if (!label?.trim() || !level_id) return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Nom et niveau requis' })
+
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  if (!yearId) return res.status(400).json({ error: 'NO_YEAR', message: 'Année académique non configurée' })
+
+  const exists = db.prepare('SELECT id FROM classrooms WHERE label = ? AND academic_year_id = ? AND is_deleted = 0').get(label.trim(), parseInt(yearId))
+  if (exists) return res.status(400).json({ error: 'DUPLICATE', message: 'Une classe avec ce nom existe déjà' })
+
+  const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
+
+  const result = db.transaction(() => {
+    const r = db.prepare(`
+      INSERT INTO classrooms (classroom_uid, label, level_id, serie_id, academic_year_id, capacity)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(generateUUID(), label.trim(), level_id, serie_id || null, parseInt(yearId), capacity || 50)
+
+    const classroomId = r.lastInsertRowid
+
+    const configRow = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(`assessment_config_${level_id}`)
+    const cfg = configRow ? JSON.parse(configRow.value) : { interrogations: 4, devoirs: 1, compositions: 1, max_score: 20 }
+
+    const subjects = serie_id
+      ? db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1 AND (serie_id = ? OR serie_id IS NULL)').all(level_id, serie_id)
+      : db.prepare('SELECT subject_id FROM level_subjects WHERE level_id = ? AND is_active = 1 AND serie_id IS NULL').all(level_id)
+
+    const tpl = db.prepare(`
+      INSERT OR IGNORE INTO assessment_templates (classroom_id, subject_id, academic_year_id, semester, assessment_type, sequence_number, max_score, weight)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+
+    for (const sub of subjects) {
+      for (let sem = 1; sem <= periodeCount; sem++) {
+        for (let i = 1; i <= cfg.interrogations; i++) tpl.run(classroomId, sub.subject_id, parseInt(yearId), sem, 'interrogation', i, cfg.max_score, 1)
+        for (let i = 1; i <= cfg.devoirs; i++) tpl.run(classroomId, sub.subject_id, parseInt(yearId), sem, 'devoir', i, cfg.max_score, 1)
+        for (let i = 1; i <= cfg.compositions; i++) tpl.run(classroomId, sub.subject_id, parseInt(yearId), sem, 'composition', i, cfg.max_score, 2)
+      }
+    }
+
+    return classroomId
+  })()
+
+  return res.status(201).json({ success: true, classroom_id: result })
 })
 
 // ─── DELETE /api/classrooms/:id — Soft delete (no students) ─

@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../../utils/api'
 
-const STATUS_LABELS = { active: 'Actif', graduated: 'Diplômé', transferred: 'Transféré', excluded: 'Exclu', deceased: 'Décédé' }
-const STATUS_COLORS = { active: 'bg-brand-50 text-brand-600', graduated: 'bg-steel-100 text-steel-600', transferred: 'bg-yellow-100 text-yellow-700', excluded: 'bg-red-100 text-red-700', deceased: 'bg-steel-200 text-steel-500' }
+const STATUS_LABELS = { active: 'Actif', graduated: 'Diplômé', transferred: 'Transféré', excluded: 'Exclu' }
+const STATUS_COLORS = { active: 'bg-brand-50 text-brand-600', graduated: 'bg-steel-100 text-steel-600', transferred: 'bg-yellow-100 text-yellow-700', excluded: 'bg-red-100 text-red-700' }
 
 export default function StudentsPage() {
   const [students, setStudents] = useState([])

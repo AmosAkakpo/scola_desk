@@ -2,7 +2,22 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import api from '../../utils/api'
 
-const STATUS_LABELS = { active: 'Actif', graduated: 'Diplômé', transferred: 'Transféré', excluded: 'Exclu', deceased: 'Décédé' }
+const STATUS_LABELS = { active: 'Actif', graduated: 'Diplômé', transferred: 'Transféré', excluded: 'Exclu' }
+
+const VERDICT_CONFIG = {
+  admis: { label: 'Admis', bg: 'bg-brand-50 text-brand-600' },
+  doublant: { label: 'Redoublant', bg: 'bg-yellow-100 text-yellow-700' },
+  exclu: { label: 'Exclu', bg: 'bg-red-100 text-red-600' },
+  transfere: { label: 'Transféré', bg: 'bg-blue-100 text-blue-600' },
+  abandon: { label: 'Abandon', bg: 'bg-steel-100 text-steel-600' },
+  en_cours: { label: 'En cours', bg: 'bg-brand-50 text-brand-500' },
+}
+
+function VerdictBadge({ verdict }) {
+  if (!verdict) return <span className="text-steel-400">—</span>
+  const cfg = VERDICT_CONFIG[verdict] || { label: verdict, bg: 'bg-steel-100 text-steel-600' }
+  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${cfg.bg}`}>{cfg.label}</span>
+}
 
 export default function StudentDetailPage() {
   const { id } = useParams()
@@ -145,28 +160,40 @@ export default function StudentDetailPage() {
         {history.length === 0 ? (
           <p className="text-sm text-steel-400 text-center py-4">Aucun historique</p>
         ) : (
-          <div className="space-y-3">
-            {history.map((h, i) => (
-              <div key={i} className="flex items-start gap-3 py-2 border-b border-steel-50 last:border-0">
-                <div className="w-2 h-2 rounded-full bg-brand mt-1.5 shrink-0" />
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-steel-800">{h.year_label} — {h.classroom} ({h.level})</p>
-                    {h.verdict && <span className={`px-2 py-0.5 rounded text-xs font-medium ${h.verdict === 'admis' ? 'bg-brand-50 text-brand-600' : h.verdict === 'doublant' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-600'}`}>{h.verdict}</span>}
-                  </div>
-                  {h.semesters?.length > 0 && (
-                    <div className="flex gap-4 mt-1">
-                      {h.semesters.map(s => (
-                        <span key={s.semester} className="text-xs text-steel-500">
-                          T{s.semester}: {s.average?.toFixed(2) || '—'} ({s.rank ? `${s.rank}ème/${s.class_size}` : '—'})
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {h.final_average && <p className="text-xs text-steel-500 mt-0.5">Moyenne annuelle: {h.final_average.toFixed(2)}</p>}
-                </div>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-steel-200 bg-steel-50">
+                  <th className="text-left px-4 py-2.5 text-steel-500 font-medium text-xs">Année</th>
+                  <th className="text-left px-4 py-2.5 text-steel-500 font-medium text-xs">Classe</th>
+                  <th className="text-left px-4 py-2.5 text-steel-500 font-medium text-xs">Niveau</th>
+                  <th className="text-left px-4 py-2.5 text-steel-500 font-medium text-xs">Moyenne</th>
+                  <th className="text-left px-4 py-2.5 text-steel-500 font-medium text-xs">Rang</th>
+                  <th className="text-left px-4 py-2.5 text-steel-500 font-medium text-xs">Statut</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h, i) => {
+                  const lastSemester = h.semesters?.length > 0 ? h.semesters[h.semesters.length - 1] : null
+                  const avg = h.final_average ?? lastSemester?.average ?? null
+                  const rank = lastSemester?.rank ?? null
+                  const classSize = lastSemester?.class_size ?? null
+                  const verdict = h.verdict || (i === 0 && !h.final_average ? 'en_cours' : null)
+                  return (
+                    <tr key={i} className="border-b border-steel-100 hover:bg-steel-50 transition-colors">
+                      <td className="px-4 py-3 text-steel-800 font-medium">{h.year_label}</td>
+                      <td className="px-4 py-3 text-steel-700">{h.classroom}</td>
+                      <td className="px-4 py-3 text-steel-600">{h.level}</td>
+                      <td className="px-4 py-3 text-steel-800">{avg != null ? avg.toFixed(2) : '—'}</td>
+                      <td className="px-4 py-3 text-steel-700">{rank ? `${rank}${rank === 1 ? 'er' : 'ème'}/${classSize}` : '—'}</td>
+                      <td className="px-4 py-3">
+                        <VerdictBadge verdict={verdict} />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </section>

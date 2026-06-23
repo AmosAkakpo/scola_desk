@@ -46,7 +46,11 @@ router.get('/', requirePermission('students.view'), (req, res) => {
 // ─── GET /api/teachers/:id — Full profile ───────────────────
 router.get('/:id', requirePermission('students.view'), (req, res) => {
   const db = getDb()
-  const teacher = db.prepare('SELECT * FROM teachers WHERE id = ? AND is_deleted = 0').get(req.params.id)
+  const teacher = db.prepare(`
+    SELECT t.*, s.name AS specialty_name FROM teachers t
+    LEFT JOIN subjects s ON s.id = t.subject_specialty_id
+    WHERE t.id = ? AND t.is_deleted = 0
+  `).get(req.params.id)
   if (!teacher) return res.status(404).json({ error: 'NOT_FOUND', message: 'Enseignant introuvable' })
 
   const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
@@ -84,14 +88,26 @@ router.get('/:id', requirePermission('students.view'), (req, res) => {
 // ─── PUT /api/teachers/:id — Update info ────────────────────
 router.put('/:id', requirePermission('students.edit'), (req, res) => {
   const db = getDb()
-  const { full_name, phone, email } = req.body
+  const { full_name, phone, email, qualification } = req.body
   const teacher = db.prepare('SELECT id FROM teachers WHERE id = ? AND is_deleted = 0').get(req.params.id)
   if (!teacher) return res.status(404).json({ error: 'NOT_FOUND' })
 
-  db.prepare('UPDATE teachers SET full_name = ?, phone = ?, email = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .run(full_name?.trim(), phone || null, email || null, req.params.id)
+  db.prepare('UPDATE teachers SET full_name = ?, phone = ?, email = ?, qualification = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(full_name?.trim(), phone || null, email || null, qualification || null, req.params.id)
 
   return res.json({ success: true })
+})
+
+// ─── PATCH /api/teachers/:id/toggle-active — Toggle active status ─
+router.patch('/:id/toggle-active', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  const teacher = db.prepare('SELECT id, is_active FROM teachers WHERE id = ? AND is_deleted = 0').get(req.params.id)
+  if (!teacher) return res.status(404).json({ error: 'NOT_FOUND' })
+
+  const newStatus = teacher.is_active === 1 ? 0 : 1
+  db.prepare('UPDATE teachers SET is_active = ?, updated_at = datetime(\'now\') WHERE id = ?').run(newStatus, req.params.id)
+
+  return res.json({ success: true, is_active: newStatus })
 })
 
 // ─── POST /api/teachers — Add new teacher ───────────────────

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import api from '../../utils/api'
 
@@ -123,7 +123,7 @@ export default function ClassroomDetailPage() {
             </div>
           )}
 
-          <div className="bg-white rounded-xl border border-steel-200 overflow-hidden">
+          <div className="bg-white rounded-xl border border-steel-200 overflow-visible">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-steel-200 bg-steel-50">
@@ -203,16 +203,26 @@ export default function ClassroomDetailPage() {
 
 function MoveDropdown({ classrooms, onMove }) {
   const [open, setOpen] = useState(false)
+  const [openUp, setOpenUp] = useState(false)
+  const btnRef = useRef(null)
+
+  function handleOpen() {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setOpenUp(window.innerHeight - rect.bottom < 200)
+    }
+    setOpen(!open)
+  }
 
   if (classrooms.length === 0) return null
 
   return (
     <div className="relative">
-      <button onClick={() => setOpen(!open)} className="text-xs text-steel-400 hover:text-steel-600">Déplacer</button>
+      <button ref={btnRef} onClick={handleOpen} className="text-xs text-steel-400 hover:text-steel-600">Déplacer</button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-6 bg-white border border-steel-200 rounded-lg shadow-lg z-20 py-1 w-48 max-h-48 overflow-y-auto">
+          <div className={`absolute right-0 bg-white border border-steel-200 rounded-lg shadow-lg z-20 py-1 w-48 max-h-48 overflow-y-auto ${openUp ? 'bottom-6' : 'top-6'}`}>
             {classrooms.map(c => (
               <button key={c.id} onClick={() => { onMove(c.id); setOpen(false) }}
                 className="w-full text-left px-3 py-1.5 text-xs text-steel-700 hover:bg-steel-50">

@@ -1,10 +1,26 @@
 const express = require('express')
 const router = express.Router()
+const XLSX = require('xlsx')
 const { getDb } = require('../db/init')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
 
 router.use(requireAuth)
+
+const TYPE_LABELS = { interrogation: 'Interro', devoir: 'Devoir', composition: 'Compo', tp: 'TP', oral: 'Oral' }
+const templateLabel = (t) => `${TYPE_LABELS[t.assessment_type] || t.assessment_type} ${t.sequence_number}`
+
+// Fetch the ordered assessment templates for a class+subject+semester
+function getTemplates(db, classroomId, subjectId, yearId, semester) {
+  return db.prepare(`
+    SELECT id, assessment_type, sequence_number, max_score, weight
+    FROM assessment_templates
+    WHERE classroom_id = ? AND subject_id = ? AND academic_year_id = ? AND semester = ?
+    ORDER BY
+      CASE assessment_type WHEN 'interrogation' THEN 1 WHEN 'devoir' THEN 2 WHEN 'composition' THEN 3 WHEN 'tp' THEN 4 WHEN 'oral' THEN 5 END,
+      sequence_number
+  `).all(classroomId, subjectId, yearId, semester)
+}
 
 function getAppreciationScale(db) {
   const raw = db.prepare("SELECT value FROM app_settings WHERE key = 'appreciation_scale'").get()?.value
@@ -228,6 +244,131 @@ router.post('/batch', requirePermission('grades.edit'), (req, res) => {
   })()
 
   return res.json({ success: true, saved })
+})
+
+// ─── GET /api/grades/template/:classroomId/:subjectId/:semester — Excel template ─
+router.get('/template/:classroomId/:subjectId/:semester', requirePermission('grades.view'), (req, res) => {
+  const db = getDb()
+  const { classroomId, subjectId, semester } = req.params
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+
+  const classroom = db.prepare('SELECT label FROM classrooms WHERE id = ? AND is_deleted = 0').get(classroomId)
+  const subject = db.prepare('SELECT name FROM subjects WHERE id = ?').get(subjectId)
+  if (!classroom || !subject) return res.status(404).json({ error: 'NOT_FOUND' })
+
+  const templates = getTemplates(db, classroomId, subjectId, yearId, semester)
+  if (templates.length === 0) return res.status(400).json({ error: 'NO_TEMPLATES', message: 'Aucune évaluation configurée pour cette matière' })
+
+  const students = db.prepare(`
+    SELECT s.id, s.full_name, s.matricule FROM students s
+    JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
+    WHERE s.is_deleted = 0 ORDER BY s.full_name
+  `).all(classroomId)
+
+  // Existing scores so the teacher sees/corrects what is already entered
+  const scoreMap = {}
+  if (templates.length > 0) {
+    const rows = db.prepare(`
+      SELECT template_id, student_id, score, is_absent FROM assessment_scores
+      WHERE template_id IN (${templates.map(() => '?').join(',')}) AND is_deleted = 0
+    `).all(...templates.map(t => t.id))
+    rows.forEach(r => { scoreMap[`${r.template_id}_${r.student_id}`] = r })
+  }
+
+  const headers = ['Matricule', 'Nom complet', ...templates.map(t => `${templateLabel(t)} /${t.max_score}`)]
+  const data = [headers]
+  for (const st of students) {
+    const row = [st.matricule || '', st.full_name]
+    for (const t of templates) {
+      const sc = scoreMap[`${t.id}_${st.id}`]
+      row.push(sc ? (sc.is_absent === 1 ? 'ABS' : (sc.score ?? '')) : '')
+    }
+    data.push(row)
+  }
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet(data)
+  ws['!cols'] = headers.map((h, i) => ({ wch: i === 1 ? 24 : (i === 0 ? 18 : Math.max(h.length + 1, 10)) }))
+  XLSX.utils.book_append_sheet(wb, ws, 'Notes')
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+
+  const fname = `${classroom.label}_${subject.name}_T${semester}`.replace(/[^a-zA-Z0-9_]/g, '_')
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', `attachment; filename="${fname}.xlsx"`)
+  return res.send(buf)
+})
+
+// ─── POST /api/grades/upload/:classroomId/:subjectId/:semester — Import filled Excel ─
+router.post('/upload/:classroomId/:subjectId/:semester', express.raw({ type: '*/*', limit: '10mb' }), requirePermission('grades.edit'), (req, res) => {
+  try {
+    const db = getDb()
+    const { classroomId, subjectId, semester } = req.params
+    const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+
+    const templates = getTemplates(db, classroomId, subjectId, yearId, semester)
+    if (templates.length === 0) return res.status(400).json({ error: 'NO_TEMPLATES', message: 'Aucune évaluation configurée' })
+
+    // Map normalized column label -> template
+    const labelToTemplate = {}
+    templates.forEach(t => { labelToTemplate[templateLabel(t).toLowerCase()] = t })
+
+    // Students for this class, matchable by matricule or name
+    const students = db.prepare(`
+      SELECT s.id, s.full_name, s.matricule FROM students s
+      JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
+      WHERE s.is_deleted = 0
+    `).all(classroomId)
+    const byMatricule = {}, byName = {}
+    students.forEach(s => {
+      if (s.matricule) byMatricule[s.matricule.trim().toLowerCase()] = s.id
+      byName[s.full_name.trim().toLowerCase()] = s.id
+    })
+
+    const wb = XLSX.read(req.body)
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
+    if (rows.length === 0) return res.status(400).json({ error: 'EMPTY', message: 'Fichier vide' })
+
+    // Strip trailing "/NN" + whitespace from headers to recover the base label
+    const baseLabel = (key) => key.replace(/\s*\/\s*\d+\s*$/, '').trim().toLowerCase()
+
+    const upsert = db.prepare(`
+      INSERT INTO assessment_scores (template_id, student_id, score, is_absent, entered_by)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(template_id, student_id) DO UPDATE SET
+        score = excluded.score, is_absent = excluded.is_absent,
+        entered_by = excluded.entered_by, entered_at = datetime('now'), is_deleted = 0
+    `)
+
+    const errors = []
+    let saved = 0, matched = 0
+    db.transaction(() => {
+      rows.forEach((row, i) => {
+        const matricule = (row['Matricule'] || '').toString().trim().toLowerCase()
+        const name = (row['Nom complet'] || '').toString().trim().toLowerCase()
+        const studentId = byMatricule[matricule] || byName[name]
+        if (!studentId) { errors.push({ row: i + 2, message: `Élève introuvable: ${row['Nom complet'] || row['Matricule'] || '?'}` }); return }
+        matched++
+
+        for (const [key, val] of Object.entries(row)) {
+          const tpl = labelToTemplate[baseLabel(key)]
+          if (!tpl) continue // skips Matricule/Nom complet and unknown columns
+          const raw = (val ?? '').toString().trim().toUpperCase()
+          if (raw === '') continue // blank = leave untouched
+          if (raw === 'ABS' || raw === 'A') { upsert.run(tpl.id, studentId, null, 1, req.user.id); saved++; continue }
+          const num = parseFloat(raw.replace(',', '.'))
+          if (isNaN(num)) { errors.push({ row: i + 2, message: `Valeur invalide "${val}" (${key})` }); continue }
+          if (num < 0 || num > tpl.max_score) { errors.push({ row: i + 2, message: `Note hors barème: ${num} (max ${tpl.max_score}, ${key})` }); continue }
+          upsert.run(tpl.id, studentId, num, 0, req.user.id)
+          saved++
+        }
+      })
+    })()
+
+    return res.json({ success: true, saved, matched, total_rows: rows.length, errors })
+  } catch (err) {
+    console.error('[GRADES UPLOAD]', err)
+    return res.status(500).json({ error: 'PARSE_ERROR', message: 'Impossible de lire le fichier Excel' })
+  }
 })
 
 // ─── POST /api/grades/compute/:classroomId/:semester — Compute averages ─

@@ -6,6 +6,7 @@ export default function ClassroomsPage() {
   const [classrooms, setClassrooms] = useState([])
   const [totalRooms, setTotalRooms] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
   const navigate = useNavigate()
 
   async function fetchClassrooms() {
@@ -39,6 +40,10 @@ export default function ClassroomsPage() {
             {totalRooms && <span className="ml-2">· {classrooms.length}/{totalRooms} salles</span>}
           </p>
         </div>
+        <button onClick={() => setShowAdd(true)}
+          className="px-4 py-2 bg-brand hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-colors">
+          + Ajouter une classe
+        </button>
       </div>
 
       {totalRooms && classrooms.length > parseInt(totalRooms) && (
@@ -89,6 +94,89 @@ export default function ClassroomsPage() {
           ))}
         </div>
       )}
+
+      {showAdd && <AddClassroomModal onClose={() => setShowAdd(false)} onDone={() => { setShowAdd(false); fetchClassrooms() }} />}
+    </div>
+  )
+}
+
+function AddClassroomModal({ onClose, onDone }) {
+  const [levels, setLevels] = useState([])
+  const [series, setSeries] = useState([])
+  const [form, setForm] = useState({ label: '', level_id: '', serie_id: '', capacity: 50 })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.get('/api/onboarding/classroom-data').then(res => {
+      setLevels(res.data.levels || [])
+      setSeries(res.data.series || [])
+      if (res.data.levels?.length > 0) setForm(p => ({ ...p, level_id: res.data.levels[0].id }))
+    })
+  }, [])
+
+  const levelSeries = series.filter(s => s.level_id === parseInt(form.level_id))
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!form.label.trim() || !form.level_id) return
+    setError(''); setSaving(true)
+    try {
+      await api.post('/api/classrooms', {
+        label: form.label.trim(),
+        level_id: parseInt(form.level_id),
+        serie_id: form.serie_id ? parseInt(form.serie_id) : null,
+        capacity: parseInt(form.capacity) || 50,
+      })
+      onDone()
+    } catch (err) {
+      setError(err.response?.data?.message || 'Erreur')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <h2 className="text-lg font-medium text-steel-900 mb-4">Ajouter une classe</h2>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-xs text-steel-500 mb-1">Nom de la classe <span className="text-red-500">*</span></label>
+            <input type="text" required value={form.label} onChange={e => setForm(p => ({ ...p, label: e.target.value }))}
+              placeholder="Ex: 6ème A" autoFocus
+              className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
+          </div>
+          <div>
+            <label className="block text-xs text-steel-500 mb-1">Niveau <span className="text-red-500">*</span></label>
+            <select value={form.level_id} onChange={e => setForm(p => ({ ...p, level_id: e.target.value, serie_id: '' }))}
+              className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand bg-white">
+              {levels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </div>
+          {levelSeries.length > 0 && (
+            <div>
+              <label className="block text-xs text-steel-500 mb-1">Série</label>
+              <select value={form.serie_id} onChange={e => setForm(p => ({ ...p, serie_id: e.target.value }))}
+                className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand bg-white">
+                <option value="">— Aucune —</option>
+                {levelSeries.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="block text-xs text-steel-500 mb-1">Capacité</label>
+            <input type="number" min={1} value={form.capacity} onChange={e => setForm(p => ({ ...p, capacity: e.target.value }))}
+              className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
+          </div>
+          {error && <p className="text-red-500 text-xs">{error}</p>}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Annuler</button>
+            <button type="submit" disabled={saving} className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium">
+              {saving ? 'Création...' : 'Créer'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }
