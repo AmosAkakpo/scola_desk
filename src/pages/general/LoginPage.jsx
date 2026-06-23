@@ -33,9 +33,7 @@ export default function LoginPage({ onLogin }) {
     <div className="min-h-screen flex items-center justify-center bg-steel-900">
       <div className="w-full max-w-sm p-8">
         <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 bg-steel-900 border-2 border-steel-700 rounded-2xl flex items-center justify-center mb-4">
-            <span className="text-brand text-3xl font-semibold">S</span>
-          </div>
+          <img src="/android-chrome-192x192.png" alt="ScolaDesk" className="w-16 h-16 rounded-2xl mb-4" />
           <h1 className="text-xl font-medium text-steel-200">{schoolName || 'ScolaDesk'}</h1>
           <p className="text-steel-400 text-sm mt-1">Connexion</p>
         </div>

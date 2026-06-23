@@ -466,8 +466,7 @@ function AddSubjectInline({ subjects, onAdded }) {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  async function handleAdd(e) {
-    e.preventDefault()
+  async function handleAdd() {
     const trimmed = name.trim()
     if (!trimmed) return
     if (subjects.some(s => s.name.toLowerCase() === trimmed.toLowerCase())) {
@@ -476,7 +475,7 @@ function AddSubjectInline({ subjects, onAdded }) {
     }
     setError(''); setSaving(true)
     try {
-      const res = await api.post('/api/settings/subjects', { name: trimmed, short_code: code.trim().toUpperCase() || null })
+      const res = await api.post('/api/onboarding/add-subject', { name: trimmed, short_code: code.trim().toUpperCase() || null })
       onAdded({ id: res.data.subject_id, name: trimmed, short_code: code.trim().toUpperCase() || null })
       setName(''); setCode('')
     } catch (err) { setError(err.response?.data?.message || 'Erreur') }
@@ -485,20 +484,22 @@ function AddSubjectInline({ subjects, onAdded }) {
 
   return (
     <div className="mb-3 pb-3 border-b border-steel-100">
-      <form onSubmit={handleAdd} className="flex gap-2 items-end">
+      <div className="flex gap-2 items-end">
         <div className="flex-1">
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ajouter une matière..."
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd(e) } }}
             className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
         </div>
         <div className="w-20">
           <input type="text" value={code} onChange={e => setCode(e.target.value)} placeholder="Code"
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd(e) } }}
             className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand uppercase" />
         </div>
-        <button type="submit" disabled={saving || !name.trim()}
+        <button type="button" disabled={saving || !name.trim()} onClick={handleAdd}
           className="px-3 py-1.5 border border-brand text-brand rounded-lg text-xs font-medium hover:bg-brand-50 disabled:opacity-30">
           {saving ? '...' : '+'}
         </button>
-      </form>
+      </div>
       {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
     </div>
   )
@@ -876,25 +877,138 @@ function Step8Classrooms({ onNext }) {
 }
 
 // ─── Step 9: Matricule Config + Teachers ─────────────────────
+function TeacherRow({ t, i, subjects, showLabels, onUpdate, onRemove }) {
+  return (
+    <div className="grid grid-cols-12 gap-2 items-end border-b border-steel-100 pb-2">
+      <div className="col-span-3">
+        {showLabels && <label className="block text-xs text-steel-500 mb-1">Nom complet *</label>}
+        <input type="text" value={t.full_name} onChange={e => onUpdate(i, 'full_name', e.target.value)} placeholder="Nom complet"
+          className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+      </div>
+      <div className="col-span-1">
+        {showLabels && <label className="block text-xs text-steel-500 mb-1">Sexe</label>}
+        <select value={t.gender || ''} onChange={e => onUpdate(i, 'gender', e.target.value || null)}
+          className="w-full px-1 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand">
+          <option value="">—</option>
+          <option value="M">M</option>
+          <option value="F">F</option>
+        </select>
+      </div>
+      <div className="col-span-2">
+        {showLabels && <label className="block text-xs text-steel-500 mb-1">Téléphone</label>}
+        <input type="tel" value={t.phone || ''} onChange={e => onUpdate(i, 'phone', e.target.value)} placeholder="Tél."
+          className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+      </div>
+      <div className="col-span-2">
+        {showLabels && <label className="block text-xs text-steel-500 mb-1">Email</label>}
+        <input type="email" value={t.email || ''} onChange={e => onUpdate(i, 'email', e.target.value)} placeholder="Email"
+          className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+      </div>
+      <div className="col-span-2">
+        {showLabels && <label className="block text-xs text-steel-500 mb-1">Qualifications</label>}
+        <input type="text" value={t.qualification || ''} onChange={e => onUpdate(i, 'qualification', e.target.value)} placeholder="CAPES, Licence..."
+          className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+      </div>
+      <div className="col-span-2">
+        {showLabels && <label className="block text-xs text-steel-500 mb-1">Matière</label>}
+        <div className="flex gap-1">
+          <select value={t.subject_specialty_id || ''} onChange={e => onUpdate(i, 'subject_specialty_id', e.target.value ? parseInt(e.target.value) : null)}
+            className="w-full px-1 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand">
+            <option value="">—</option>
+            {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <button type="button" onClick={() => onRemove(i)} className="text-red-400 hover:text-red-500 text-xs px-1 shrink-0">✕</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Step9Teachers({ onNext }) {
   const [mode, setMode] = useState('custom')
-  const [teachers, setTeachers] = useState([{ full_name: '', phone: '', email: '' }])
+  const [teachers, setTeachers] = useState([])
+  const [subjects, setSubjects] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [preview, setPreview] = useState(null)
 
-  // Load existing teachers + mode (for back-nav)
   useEffect(() => {
     api.get('/api/onboarding/teachers-data').then(res => {
       setMode(res.data.matricule_mode || 'custom')
+      setSubjects(res.data.subjects || [])
       if (res.data.teachers?.length > 0) {
-        setTeachers(res.data.teachers.map(t => ({ full_name: t.full_name, phone: t.phone || '', email: t.email || '' })))
+        setTeachers(res.data.teachers.map(t => ({
+          full_name: t.full_name, phone: t.phone || '', email: t.email || '',
+          gender: t.gender || null, qualification: t.qualification || '',
+          subject_specialty_id: t.subject_specialty_id || null,
+        })))
       }
     }).catch(() => {})
   }, [])
 
-  function addTeacher() { setTeachers(prev => [...prev, { full_name: '', phone: '', email: '' }]) }
-  function updateTeacher(i, field, value) { setTeachers(prev => prev.map((t, idx) => idx === i ? { ...t, [field]: value } : t)) }
+  function addTeacher() {
+    setTeachers(prev => [...prev, { full_name: '', phone: '', email: '', gender: null, qualification: '', subject_specialty_id: null }])
+  }
+  function updateTeacher(i, field, value) {
+    setTeachers(prev => prev.map((t, idx) => idx === i ? { ...t, [field]: value } : t))
+  }
   function removeTeacher(i) { setTeachers(prev => prev.filter((_, idx) => idx !== i)) }
+
+  async function downloadTemplate() {
+    try {
+      const res = await api.get('/api/onboarding/teacher-template', { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a'); a.href = url; a.download = 'modele_enseignants.xlsx'; a.click()
+      URL.revokeObjectURL(url)
+    } catch { setError('Impossible de télécharger le modèle') }
+  }
+
+  async function handleFileUpload(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setUploading(true); setError('')
+    try {
+      const buf = await file.arrayBuffer()
+      const res = await api.post('/api/onboarding/parse-teachers', buf, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+      })
+      setPreview(res.data)
+    } catch (err) {
+      setError(err.response?.data?.message || 'Erreur de lecture du fichier')
+    }
+    setUploading(false)
+  }
+
+  function confirmPreview() {
+    if (!preview?.parsed) return
+    const newTeachers = preview.parsed
+      .filter(p => p.full_name && !p.errors)
+      .map(p => ({
+        full_name: p.full_name,
+        gender: p.gender,
+        phone: p.phone || '',
+        email: p.email || '',
+        qualification: p.qualification || '',
+        subject_specialty_id: p.subject_match?.id || null,
+      }))
+    const existingNames = new Set(teachers.map(t => t.full_name.trim().toLowerCase()))
+    const deduped = newTeachers.filter(t => !existingNames.has(t.full_name.trim().toLowerCase()))
+    setTeachers(prev => [...prev, ...deduped])
+    setPreview(null)
+  }
+
+  function updatePreviewSubject(rowIdx, subjectId) {
+    setPreview(prev => {
+      const updated = { ...prev, parsed: prev.parsed.map((p, i) => {
+        if (i !== rowIdx) return p
+        const sub = prev.subjects.find(s => s.id === parseInt(subjectId))
+        return { ...p, subject_match: sub ? { id: sub.id, name: sub.name, exact: true } : null, subject_warning: null }
+      })}
+      return updated
+    })
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -906,10 +1020,11 @@ function Step9Teachers({ onNext }) {
   }
 
   return (
-    <div className="max-w-lg mx-auto">
+    <div className="max-w-4xl mx-auto">
       <h2 className="text-lg font-medium text-steel-900 mb-1">Enseignants et matricules</h2>
       <p className="text-sm text-steel-500 mb-6">Configurez le système de matricule et ajoutez les enseignants.</p>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Matricule mode */}
         <div className="bg-white rounded-xl border border-steel-200 p-5">
           <p className="text-sm font-medium text-steel-700 mb-3">Système de matricule élèves</p>
           <div className="space-y-2">
@@ -930,35 +1045,89 @@ function Step9Teachers({ onNext }) {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-steel-200 p-5 space-y-3">
-          <p className="text-sm font-medium text-steel-700">Enseignants</p>
-          {teachers.map((t, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-5">
-                {i === 0 && <label className="block text-xs text-steel-500 mb-1">Nom complet *</label>}
-                <input type="text" value={t.full_name} onChange={e => updateTeacher(i, 'full_name', e.target.value)} placeholder="Nom complet"
-                  className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
-              </div>
-              <div className="col-span-3">
-                {i === 0 && <label className="block text-xs text-steel-500 mb-1">Téléphone</label>}
-                <input type="tel" value={t.phone} onChange={e => updateTeacher(i, 'phone', e.target.value)} placeholder="Tél."
-                  className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
-              </div>
-              <div className="col-span-3">
-                {i === 0 && <label className="block text-xs text-steel-500 mb-1">Email</label>}
-                <input type="email" value={t.email} onChange={e => updateTeacher(i, 'email', e.target.value)} placeholder="Email"
-                  className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
-              </div>
-              <div className="col-span-1">
-                {teachers.length > 1 && (
-                  <button type="button" onClick={() => removeTeacher(i)} className="text-red-400 hover:text-red-500 text-xs py-2">✕</button>
-                )}
+        {/* Upload section */}
+        <div className="bg-white rounded-xl border border-steel-200 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-medium text-steel-700">Import Excel</p>
+            <button type="button" onClick={downloadTemplate}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-brand text-brand rounded-lg text-xs font-medium hover:bg-brand-50 transition-colors">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              Télécharger le modèle
+            </button>
+          </div>
+          <p className="text-xs text-steel-400 mb-3">Remplissez le fichier Excel puis importez-le. Colonnes: Nom complet, Sexe, Téléphone, Email, Qualifications, Matière principale.</p>
+          <label className={`flex items-center justify-center w-full py-3 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${uploading ? 'border-brand bg-brand-50' : 'border-steel-300 hover:border-brand hover:bg-steel-50'}`}>
+            <input type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" />
+            {uploading ? (
+              <span className="flex items-center gap-2 text-xs text-brand"><span className="w-4 h-4 border-2 border-brand border-t-transparent rounded-full animate-spin" /> Analyse en cours...</span>
+            ) : (
+              <span className="text-xs text-steel-500">Cliquez pour importer un fichier Excel</span>
+            )}
+          </label>
+        </div>
+
+        {/* Upload preview */}
+        {preview && (
+          <div className="bg-white rounded-xl border border-steel-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-medium text-steel-700">
+                Aperçu — {preview.parsed.filter(p => !p.errors).length}/{preview.total} enseignants valides
+              </p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setPreview(null)}
+                  className="px-3 py-1.5 border border-steel-300 text-steel-600 rounded-lg text-xs hover:bg-steel-50">Annuler</button>
+                <button type="button" onClick={confirmPreview}
+                  className="px-3 py-1.5 bg-brand text-white rounded-lg text-xs font-medium hover:bg-brand-600">
+                  Ajouter {preview.parsed.filter(p => !p.errors).length} enseignants
+                </button>
               </div>
             </div>
-          ))}
+            <div className="max-h-64 overflow-y-auto space-y-1">
+              {preview.parsed.map((p, i) => (
+                <div key={i} className={`flex items-center gap-3 px-3 py-2 rounded-lg text-xs ${p.errors ? 'bg-red-50 border border-red-200' : p.subject_warning ? 'bg-yellow-50 border border-yellow-200' : 'bg-steel-50'}`}>
+                  <span className="font-medium text-steel-700 w-48 truncate">{p.full_name}</span>
+                  <span className="text-steel-500 w-8">{p.gender || '—'}</span>
+                  <span className="text-steel-500 w-24 truncate">{p.phone || '—'}</span>
+                  <span className="text-steel-500 w-32 truncate">{p.qualification || '—'}</span>
+                  {p.errors ? (
+                    <span className="text-red-500 flex-1">{p.errors.join(', ')}</span>
+                  ) : p.subject_warning ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className="text-yellow-600 truncate">{p.subject_warning}</span>
+                      <select value={p.subject_match?.id || ''} onChange={e => updatePreviewSubject(i, e.target.value)}
+                        className="px-1 py-0.5 border border-yellow-300 rounded text-xs bg-white">
+                        <option value="">— Ignorer —</option>
+                        {preview.subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </div>
+                  ) : (
+                    <span className="text-brand flex-1 truncate">{p.subject_match?.name || '—'}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Teachers list */}
+        <div className="bg-white rounded-xl border border-steel-200 p-5 space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-sm font-medium text-steel-700">Enseignants ({teachers.filter(t => t.full_name.trim()).length})</p>
+          </div>
+          {teachers.length > 0 && (
+            <div className="max-h-96 overflow-y-auto space-y-2">
+              {teachers.map((t, i) => (
+                <TeacherRow key={i} t={t} i={i} subjects={subjects} showLabels={i === 0}
+                  onUpdate={updateTeacher} onRemove={removeTeacher} />
+              ))}
+            </div>
+          )}
+          {teachers.length === 0 && (
+            <p className="text-xs text-steel-400 text-center py-4">Aucun enseignant ajouté. Importez un fichier Excel ou ajoutez manuellement.</p>
+          )}
           <button type="button" onClick={addTeacher}
             className="w-full py-2 border border-dashed border-steel-300 rounded-lg text-xs text-steel-500 hover:border-brand hover:text-brand transition-colors">
-            + Ajouter un enseignant
+            + Ajouter manuellement
           </button>
         </div>
 
@@ -983,11 +1152,14 @@ function Step10Students({ onNext }) {
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [clearing, setClearing] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [preview, setPreview] = useState([])
+  const [loadingPreview, setLoadingPreview] = useState(false)
 
   function loadData() {
-    api.get('/api/onboarding/student-data').then(res => {
+    return api.get('/api/onboarding/student-data').then(res => {
       setClassrooms(res.data.classrooms || [])
       setCounts(res.data.student_counts || {})
       setMode(res.data.matricule_mode || 'custom')
@@ -996,7 +1168,17 @@ function Step10Students({ onNext }) {
     })
   }
 
+  function loadPreview(classroomId) {
+    if (!classroomId) { setPreview([]); return }
+    setLoadingPreview(true)
+    api.get(`/api/onboarding/class-students/${classroomId}`).then(res => {
+      setPreview(res.data.students || [])
+      setLoadingPreview(false)
+    }).catch(() => { setPreview([]); setLoadingPreview(false) })
+  }
+
   useEffect(() => { loadData() }, [])
+  useEffect(() => { if (selectedClass) { loadPreview(selectedClass); setUploadResult(null) } }, [selectedClass])
 
   async function downloadTemplate(classroomId) {
     const res = await api.get(`/api/onboarding/student-template/${classroomId}`, { responseType: 'blob' })
@@ -1017,11 +1199,26 @@ function Step10Students({ onNext }) {
         headers: { 'Content-Type': 'application/octet-stream' },
       })
       setUploadResult(res.data)
-      loadData()
+      await loadData()
+      loadPreview(classroomId)
     } catch (err) {
-      setUploadResult({ success: false, message: err.response?.data?.message || 'Erreur d\'import' })
+      setUploadResult({ success: false, message: err.response?.data?.message || "Erreur d'import" })
     }
     setUploading(false)
+  }
+
+  async function handleClearClass(classroomId) {
+    if (!confirm(`Supprimer tous les élèves de cette classe ? Vous pourrez ensuite réimporter un fichier.`)) return
+    setClearing(true)
+    try {
+      await api.delete(`/api/onboarding/class-students/${classroomId}`)
+      setUploadResult(null)
+      await loadData()
+      loadPreview(classroomId)
+    } catch (err) {
+      setError(err.response?.data?.message || 'Erreur de suppression')
+    }
+    setClearing(false)
   }
 
   async function handleContinue() {
@@ -1033,63 +1230,125 @@ function Step10Students({ onNext }) {
   if (loading) return <div className="text-center py-8"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin mx-auto" /></div>
 
   const totalStudents = Object.values(counts).reduce((s, c) => s + c, 0)
+  const classCount = counts[selectedClass] || 0
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       <h2 className="text-lg font-medium text-steel-900 mb-1">Import des élèves</h2>
-      <p className="text-sm text-steel-500 mb-6">Téléchargez le modèle Excel par classe, remplissez-le, puis importez-le. Mode matricule : <strong>{mode}</strong></p>
+      <p className="text-sm text-steel-500 mb-2">Importez un fichier Excel par classe. Téléchargez le modèle, remplissez-le, puis importez-le.</p>
+      <p className="text-xs text-steel-400 italic mb-6">NB : vous pouvez presser continuer pour passer cette étape.</p>
 
+      {/* Class tabs */}
       <div className="flex gap-2 flex-wrap mb-4">
-        {classrooms.map(c => (
-          <button key={c.id} type="button" onClick={() => { setSelectedClass(c.id); setUploadResult(null) }}
-            className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${selectedClass === c.id ? 'bg-brand text-white' : 'bg-white border border-steel-200 text-steel-600 hover:bg-steel-50'}`}>
-            {c.label} <span className="ml-1 opacity-70">({counts[c.id] || 0})</span>
-          </button>
-        ))}
+        {classrooms.map(c => {
+          const cnt = counts[c.id] || 0
+          return (
+            <button key={c.id} type="button" onClick={() => setSelectedClass(c.id)}
+              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${selectedClass === c.id ? 'bg-brand text-white' : cnt > 0 ? 'bg-brand-50 border border-brand-200 text-brand-700' : 'bg-white border border-steel-200 text-steel-600 hover:bg-steel-50'}`}>
+              {c.label} <span className="ml-1 opacity-70">({cnt})</span>
+            </button>
+          )
+        })}
       </div>
 
       {selectedClass && (
-        <div className="bg-white rounded-xl border border-steel-200 p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-steel-700">{classrooms.find(c => c.id === selectedClass)?.label}</p>
-            <button type="button" onClick={() => downloadTemplate(selectedClass)}
-              className="px-3 py-1.5 text-xs font-medium text-brand hover:text-brand-600 border border-brand-100 rounded-lg hover:bg-brand-50 transition-colors">
-              Télécharger le modèle Excel
-            </button>
+        <div className="space-y-4">
+          {/* Upload / actions card */}
+          <div className="bg-white rounded-xl border border-steel-200 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-medium text-steel-700">
+                {classrooms.find(c => c.id === selectedClass)?.label}
+                <span className="text-steel-400 font-normal ml-2">— {classCount} élève(s)</span>
+              </p>
+              <div className="flex gap-2">
+                {classCount > 0 && (
+                  <button type="button" onClick={() => handleClearClass(selectedClass)} disabled={clearing}
+                    className="px-3 py-1.5 text-xs font-medium text-red-500 hover:text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50">
+                    {clearing ? '...' : 'Supprimer et réimporter'}
+                  </button>
+                )}
+                <button type="button" onClick={() => downloadTemplate(selectedClass)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-brand hover:text-brand-600 border border-brand-100 rounded-lg hover:bg-brand-50 transition-colors">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                  Modèle Excel
+                </button>
+              </div>
+            </div>
+
+            {/* Upload zone — show when class is empty */}
+            {classCount === 0 && (
+              <label className={`flex flex-col items-center justify-center w-full py-6 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${uploading ? 'border-brand bg-brand-50' : 'border-steel-300 hover:border-brand hover:bg-steel-50'}`}>
+                <input type="file" accept=".xlsx,.xls" className="hidden"
+                  onChange={e => { if (e.target.files[0]) handleUpload(selectedClass, e.target.files[0]); e.target.value = '' }} />
+                {uploading ? (
+                  <span className="flex items-center gap-2 text-xs text-brand"><span className="w-4 h-4 border-2 border-brand border-t-transparent rounded-full animate-spin" /> Import en cours...</span>
+                ) : (
+                  <>
+                    <svg className="w-8 h-8 text-steel-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <p className="text-sm text-steel-500">Cliquer pour importer le fichier Excel</p>
+                    <p className="text-xs text-steel-400 mt-1">.xlsx — un fichier par classe</p>
+                  </>
+                )}
+              </label>
+            )}
+
+            {/* Upload result toast */}
+            {uploadResult && (
+              <div className={`rounded-lg p-3 text-sm ${uploadResult.success ? 'bg-brand-50 text-brand-600' : 'bg-red-50 text-red-600'}`}>
+                <p className="font-medium">{uploadResult.message}</p>
+                {uploadResult.errors?.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {uploadResult.errors.map((err, i) => (
+                      <p key={i} className="text-xs">Ligne {err.row}: {err.message}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="border-2 border-dashed border-steel-200 rounded-lg p-6 text-center">
-            <input type="file" accept=".xlsx,.xls" id="file-upload" className="hidden"
-              onChange={e => { if (e.target.files[0]) handleUpload(selectedClass, e.target.files[0]); e.target.value = '' }} />
-            <label htmlFor="file-upload" className="cursor-pointer">
-              {uploading ? (
-                <div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin mx-auto" />
+          {/* Preview table */}
+          {classCount > 0 && (
+            <div className="bg-white rounded-xl border border-steel-200 p-5">
+              <p className="text-sm font-medium text-steel-700 mb-3">Aperçu des élèves importés</p>
+              {loadingPreview ? (
+                <div className="text-center py-4"><div className="w-6 h-6 border-2 border-brand border-t-transparent rounded-full animate-spin mx-auto" /></div>
               ) : (
-                <>
-                  <svg className="w-8 h-8 text-steel-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                  <p className="text-sm text-steel-500">Cliquer pour importer le fichier Excel rempli</p>
-                  <p className="text-xs text-steel-400 mt-1">.xlsx uniquement</p>
-                </>
-              )}
-            </label>
-          </div>
-
-          {uploadResult && (
-            <div className={`rounded-lg p-3 text-sm ${uploadResult.success ? 'bg-brand-50 text-brand-600' : 'bg-red-50 text-red-600'}`}>
-              <p className="font-medium">{uploadResult.message}</p>
-              {uploadResult.errors?.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  {uploadResult.errors.map((err, i) => (
-                    <p key={i} className="text-xs">Ligne {err.row}: {err.message}</p>
-                  ))}
+                <div className="max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-steel-50">
+                      <tr className="text-left text-steel-500">
+                        <th className="px-2 py-2 font-medium">#</th>
+                        <th className="px-2 py-2 font-medium">Nom complet</th>
+                        <th className="px-2 py-2 font-medium">Sexe</th>
+                        <th className="px-2 py-2 font-medium">Naissance</th>
+                        <th className="px-2 py-2 font-medium">Lieu</th>
+                        <th className="px-2 py-2 font-medium">Tuteur</th>
+                        <th className="px-2 py-2 font-medium">Relation</th>
+                        <th className="px-2 py-2 font-medium">Tél. tuteur</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-steel-100">
+                      {preview.map((s, i) => (
+                        <tr key={s.id} className="hover:bg-steel-50">
+                          <td className="px-2 py-1.5 text-steel-400">{i + 1}</td>
+                          <td className="px-2 py-1.5 text-steel-800 font-medium">{s.full_name}</td>
+                          <td className="px-2 py-1.5 text-steel-600">{s.gender || '—'}</td>
+                          <td className="px-2 py-1.5 text-steel-600">{s.birth_date || '—'}</td>
+                          <td className="px-2 py-1.5 text-steel-600">{s.birth_place || '—'}</td>
+                          <td className="px-2 py-1.5 text-steel-600">{s.guardian_name || '—'}</td>
+                          <td className="px-2 py-1.5 text-steel-600">{s.guardian_relationship || '—'}</td>
+                          <td className="px-2 py-1.5 text-steel-600">{s.guardian_phone || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
           )}
-
-          <p className="text-xs text-steel-400">{counts[selectedClass] || 0} élève(s) dans cette classe</p>
         </div>
       )}
 
@@ -1157,7 +1416,8 @@ function Step11Assignments({ onNext }) {
   return (
     <div className="max-w-2xl mx-auto">
       <h2 className="text-lg font-medium text-steel-900 mb-1">Affectation des enseignants</h2>
-      <p className="text-sm text-steel-500 mb-6">Assignez un enseignant par matière et par classe.</p>
+      <p className="text-sm text-steel-500 mb-2">Assignez un enseignant par matière et par classe.</p>
+      <p className="text-xs text-steel-400 italic mb-6">NB : vous pouvez presser continuer pour passer cette étape.</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="flex gap-2 flex-wrap">
           {classrooms.map(c => {
@@ -1252,7 +1512,8 @@ function Step12Fees({ onNext }) {
   return (
     <div className="max-w-2xl mx-auto">
       <h2 className="text-lg font-medium text-steel-900 mb-1">Frais de scolarité</h2>
-      <p className="text-sm text-steel-500 mb-6">Définissez les frais par classe et par trimestre (licence PRO).</p>
+      <p className="text-sm text-steel-500 mb-2">Définissez les frais par classe et par trimestre (licence PRO).</p>
+      <p className="text-xs text-steel-400 italic mb-6">NB : vous pouvez presser continuer pour passer cette étape.</p>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="flex gap-2 flex-wrap">
           {classrooms.map(c => (

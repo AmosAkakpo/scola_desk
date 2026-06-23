@@ -66,6 +66,18 @@ function runMigrations() {
         {
             version: '004_semester_decisions',
             run: require('./migration/004_semester_decisions').migration004
+        },
+        {
+            version: '005_teacher_fields',
+            run: require('./migration/005_teacher_fields').migration005
+        },
+        {
+            version: '006_student_fields',
+            run: require('./migration/006_student_fields').migration006
+        },
+        {
+            version: '007_license_pricing_fields',
+            run: require('./migration/007_license_pricing_fields').migration007
         }
     ]
 

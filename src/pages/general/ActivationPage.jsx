@@ -66,9 +66,7 @@ export default function ActivationPage({ onActivated }) {
       <div className="w-full max-w-md p-8">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-20 h-20 bg-steel-900 border-2 border-steel-700 rounded-2xl flex items-center justify-center mb-4">
-            <span className="text-brand text-4xl font-semibold">S</span>
-          </div>
+          <img src="/android-chrome-192x192.png" alt="ScolaDesk" className="w-20 h-20 rounded-2xl mb-4" />
           <h1 className="text-2xl font-medium text-steel-200">ScolaDesk</h1>
           <p className="text-steel-400 text-sm mt-1">Activation de votre licence</p>
         </div>
@@ -84,7 +82,7 @@ export default function ActivationPage({ onActivated }) {
                 onChange={e => setSchoolCode(e.target.value.toUpperCase())}
                 required
                 className="w-full px-4 py-3 bg-steel-800 border border-steel-700 rounded-lg text-steel-200 placeholder-steel-500 focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand text-center text-lg font-mono tracking-wider"
-                placeholder="SD-CC-XXXX"
+                placeholder="CC-YYYY-XXXX"
               />
             </div>
             <div>

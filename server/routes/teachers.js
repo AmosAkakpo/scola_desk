@@ -1,7 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const { getDb } = require('../db/init')
-const { generateUUID } = require('../utils/uid')
+const { generateUUID, generateTeacherUID, getSchoolPrefix } = require('../utils/uid')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
 
@@ -101,7 +101,7 @@ router.post('/', requirePermission('students.edit'), (req, res) => {
   if (!full_name?.trim()) return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Nom requis' })
 
   const result = db.prepare('INSERT INTO teachers (teacher_uid, full_name, phone, email) VALUES (?, ?, ?, ?)')
-    .run(generateUUID(), full_name.trim(), phone || null, email || null)
+    .run(generateTeacherUID(getSchoolPrefix(db)), full_name.trim(), phone || null, email || null)
 
   return res.status(201).json({ success: true, teacher_id: result.lastInsertRowid })
 })

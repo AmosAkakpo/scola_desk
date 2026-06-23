@@ -1,7 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const { getDb } = require('../db/init')
-const { generateUUID } = require('../utils/uid')
+const { generateUUID, generateStudentUID, getSchoolPrefix } = require('../utils/uid')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
 
@@ -123,7 +123,7 @@ router.post('/', requirePermission('students.edit'), (req, res) => {
     finalMatricule = `${schoolCode}/${year}/${String(count).padStart(4, '0')}`
   }
 
-  const uid = generateUUID()
+  const uid = generateStudentUID(getSchoolPrefix(db))
   const result = db.prepare(`
     INSERT INTO students (student_uid, matricule, full_name, birth_date, birth_place, gender)
     VALUES (?, ?, ?, ?, ?, ?)

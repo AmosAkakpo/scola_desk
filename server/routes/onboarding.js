@@ -3,7 +3,7 @@ const router = express.Router()
 const XLSX = require('xlsx')
 const { getDb } = require('../db/init')
 const { hashPassword } = require('../utils/password')
-const { generateUUID, generateShortUID } = require('../utils/uid')
+const { generateUUID, generateShortUID, generateStudentUID, generateTeacherUID, generateUserUID, getSchoolPrefix } = require('../utils/uid')
 
 const TOTAL_STEPS = 13
 
@@ -161,10 +161,11 @@ router.post('/step2', requireStep(2), async (req, res) => {
     const created = []
     db.transaction(() => {
       for (const item of toCreate) {
+        const prefix = getSchoolPrefix(db)
         db.prepare(`
           INSERT INTO users (user_uid, matricule, full_name, username, password_hash, role_id)
           VALUES (?, ?, ?, ?, ?, ?)
-        `).run(generateUUID(), generateShortUID('U'), item.data.full_name.trim(), item.data.username.trim().toLowerCase(), item.hash, roles[item.role])
+        `).run(generateUserUID(prefix), generateShortUID('U'), item.data.full_name.trim(), item.data.username.trim().toLowerCase(), item.hash, roles[item.role])
         created.push(item.role)
       }
     })()
@@ -411,6 +412,26 @@ router.post('/step5', requireStep(5), (req, res) => {
   }
 })
 
+// ─── POST /api/onboarding/add-subject — Create subject during onboarding ─
+router.post('/add-subject', (req, res) => {
+  const { name, short_code } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Nom requis' })
+  const db = getDb()
+  const trimmedName = name.trim()
+  const trimmedCode = short_code?.trim().toUpperCase() || null
+
+  const existingName = db.prepare('SELECT id FROM subjects WHERE name = ?').get(trimmedName)
+  if (existingName) return res.status(409).json({ error: 'DUPLICATE', message: 'Cette matière existe déjà' })
+
+  if (trimmedCode) {
+    const existingCode = db.prepare('SELECT id, name FROM subjects WHERE short_code = ?').get(trimmedCode)
+    if (existingCode) return res.status(409).json({ error: 'DUPLICATE_CODE', message: `Le code "${trimmedCode}" est déjà utilisé par "${existingCode.name}"` })
+  }
+
+  const result = db.prepare('INSERT INTO subjects (name, short_code) VALUES (?, ?)').run(trimmedName, trimmedCode)
+  return res.status(201).json({ success: true, subject_id: result.lastInsertRowid })
+})
+
 // ─── GET /api/onboarding/subjects-data — Subjects + active levels ─
 router.get('/subjects-data', (req, res) => {
   const db = getDb()
@@ -590,6 +611,13 @@ router.post('/step8', requireStep(8), (req, res) => {
     const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
 
     db.transaction(() => {
+      // On re-submit (back-nav), wipe existing classrooms + their templates for a clean slate
+      const oldClassrooms = db.prepare('SELECT id FROM classrooms WHERE academic_year_id = ? AND is_deleted = 0').all(parseInt(yearId))
+      for (const old of oldClassrooms) {
+        db.prepare('DELETE FROM assessment_templates WHERE classroom_id = ?').run(old.id)
+      }
+      db.prepare('DELETE FROM classrooms WHERE academic_year_id = ? AND is_deleted = 0').run(parseInt(yearId))
+
       const classStmt = db.prepare(`
         INSERT INTO classrooms (classroom_uid, label, level_id, serie_id, academic_year_id, capacity, expected_tuition)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -601,13 +629,8 @@ router.post('/step8', requireStep(8), (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `)
 
-      const existsStmt = db.prepare('SELECT id FROM classrooms WHERE label = ? AND academic_year_id = ? AND is_deleted = 0')
-
       for (const c of classrooms) {
         if (!c.label || !c.level_id) continue
-
-        // Skip if a classroom with this label already exists for the year (back-nav re-submit)
-        if (existsStmt.get(c.label.trim(), parseInt(yearId))) continue
 
         const uid = generateUUID()
         const result = classStmt.run(
@@ -659,8 +682,128 @@ router.post('/step8', requireStep(8), (req, res) => {
 router.get('/teachers-data', (req, res) => {
   const db = getDb()
   const mode = db.prepare("SELECT value FROM app_settings WHERE key = 'matricule_mode'").get()?.value || 'custom'
-  const teachers = db.prepare('SELECT id, full_name, phone, email FROM teachers WHERE is_deleted = 0 ORDER BY full_name').all()
-  return res.json({ matricule_mode: mode, teachers })
+  const teachers = db.prepare('SELECT id, full_name, phone, email, gender, qualification, subject_specialty_id FROM teachers WHERE is_deleted = 0 ORDER BY full_name').all()
+  const subjects = db.prepare('SELECT id, name FROM subjects WHERE is_active = 1 ORDER BY name').all()
+  return res.json({ matricule_mode: mode, teachers, subjects })
+})
+
+// ─── GET /api/onboarding/teacher-template — Download Excel template ─
+router.get('/teacher-template', (req, res) => {
+  const headers = ['Nom complet', 'Sexe (M/F)', 'Téléphone', 'Email', 'Qualifications', 'Matière principale']
+  const example = ['ADJOVI Kossi Marcel', 'M', '97010001', 'adjovi@email.com', 'CAPES, Licence', 'Mathématiques']
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, example])
+  ws['!cols'] = [{ wch: 28 }, { wch: 10 }, { wch: 14 }, { wch: 24 }, { wch: 22 }, { wch: 22 }]
+  XLSX.utils.book_append_sheet(wb, ws, 'Enseignants')
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', 'attachment; filename="modele_enseignants.xlsx"')
+  return res.send(buf)
+})
+
+// ─── POST /api/onboarding/parse-teachers — Parse uploaded Excel + fuzzy match ─
+router.post('/parse-teachers', express.raw({ type: '*/*', limit: '10mb' }), (req, res) => {
+  try {
+    const db = getDb()
+    const subjects = db.prepare('SELECT id, name FROM subjects WHERE is_active = 1').all()
+
+    const wb = XLSX.read(req.body)
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws)
+
+    if (rows.length === 0) return res.status(400).json({ error: 'EMPTY', message: 'Fichier vide' })
+
+    const COL_MAP = {
+      'nom complet': 'full_name', 'nom': 'full_name', 'full_name': 'full_name', 'name': 'full_name',
+      'sexe (m/f)': 'gender', 'sexe': 'gender', 'gender': 'gender',
+      'téléphone': 'phone', 'telephone': 'phone', 'phone': 'phone', 'tel': 'phone', 'tél': 'phone',
+      'email': 'email', 'e-mail': 'email', 'mail': 'email',
+      'qualifications': 'qualification', 'qualification': 'qualification', 'diplôme': 'qualification', 'diplome': 'qualification',
+      'matière principale': 'subject_specialty', 'matière': 'subject_specialty', 'matiere principale': 'subject_specialty',
+      'matiere': 'subject_specialty', 'subject': 'subject_specialty', 'spécialité': 'subject_specialty', 'specialite': 'subject_specialty',
+    }
+
+    function mapRow(raw) {
+      const mapped = {}
+      for (const [key, val] of Object.entries(raw)) {
+        const norm = key.trim().toLowerCase()
+        const field = COL_MAP[norm]
+        if (field) mapped[field] = String(val).trim()
+      }
+      return mapped
+    }
+
+    function fuzzyMatch(input, subjectList) {
+      if (!input) return { match: null, exact: false }
+      const lower = input.toLowerCase().trim()
+      const exact = subjectList.find(s => s.name.toLowerCase() === lower)
+      if (exact) return { match: exact, exact: true }
+
+      let best = null, bestScore = 0
+      for (const s of subjectList) {
+        const sLower = s.name.toLowerCase()
+        if (sLower.includes(lower) || lower.includes(sLower)) {
+          const score = Math.min(lower.length, sLower.length) / Math.max(lower.length, sLower.length)
+          if (score > bestScore) { bestScore = score; best = s }
+        }
+        const sWords = sLower.split(/[\s-]+/)
+        const iWords = lower.split(/[\s-]+/)
+        const overlap = iWords.filter(w => sWords.some(sw => sw.startsWith(w) || w.startsWith(sw))).length
+        const wordScore = overlap / Math.max(sWords.length, iWords.length)
+        if (wordScore > bestScore && wordScore >= 0.5) { bestScore = wordScore; best = s }
+      }
+      return best ? { match: best, exact: false, score: bestScore } : { match: null, exact: false }
+    }
+
+    const parsed = []
+    const errors = []
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = mapRow(rows[i])
+      const rowErrors = []
+
+      if (!row.full_name) { rowErrors.push('Nom complet manquant'); errors.push({ row: i + 2, errors: rowErrors }); continue }
+
+      if (row.gender) {
+        const g = row.gender.toUpperCase()
+        if (g === 'M' || g === 'H' || g === 'MASCULIN') row.gender = 'M'
+        else if (g === 'F' || g === 'FEMININ' || g === 'FÉMININ') row.gender = 'F'
+        else rowErrors.push(`Sexe non reconnu: "${row.gender}" (M ou F attendu)`)
+      }
+
+      let subjectMatch = null
+      let subjectWarning = null
+      if (row.subject_specialty) {
+        const result = fuzzyMatch(row.subject_specialty, subjects)
+        if (result.match) {
+          subjectMatch = { id: result.match.id, name: result.match.name, exact: result.exact }
+          if (!result.exact) subjectWarning = `"${row.subject_specialty}" → ${result.match.name}`
+        } else {
+          subjectWarning = `Matière non reconnue: "${row.subject_specialty}"`
+        }
+      }
+
+      parsed.push({
+        row_num: i + 2,
+        full_name: row.full_name,
+        gender: (row.gender === 'M' || row.gender === 'F') ? row.gender : null,
+        phone: row.phone || null,
+        email: row.email || null,
+        qualification: row.qualification || null,
+        subject_specialty_input: row.subject_specialty || null,
+        subject_match: subjectMatch,
+        subject_warning: subjectWarning,
+        errors: rowErrors.length > 0 ? rowErrors : null,
+      })
+    }
+
+    return res.json({ parsed, errors, total: rows.length, subjects })
+  } catch (err) {
+    console.error('[PARSE TEACHERS]', err)
+    return res.status(500).json({ error: 'PARSE_ERROR', message: 'Impossible de lire le fichier Excel' })
+  }
 })
 
 // ─── POST /api/onboarding/step9 — Matricule config + Teachers ─
@@ -676,17 +819,25 @@ router.post('/step9', requireStep(9), (req, res) => {
     db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('matricule_mode', ?, datetime('now'))").run(matricule_mode)
 
     if (teachers && Array.isArray(teachers) && teachers.length > 0) {
-      const stmt = db.prepare(`
-        INSERT INTO teachers (teacher_uid, full_name, phone, email)
-        VALUES (?, ?, ?, ?)
+      const insertStmt = db.prepare(`
+        INSERT INTO teachers (teacher_uid, full_name, phone, email, gender, qualification, subject_specialty_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `)
-      // Skip teachers that already exist by name (back-nav re-submit dedup)
+      const updateStmt = db.prepare(`
+        UPDATE teachers SET phone = ?, email = ?, gender = ?, qualification = ?, subject_specialty_id = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `)
       const existsStmt = db.prepare('SELECT id FROM teachers WHERE full_name = ? AND is_deleted = 0')
       db.transaction(() => {
         for (const t of teachers) {
           if (!t.full_name?.trim()) continue
-          if (existsStmt.get(t.full_name.trim())) continue
-          stmt.run(generateUUID(), t.full_name.trim(), t.phone?.trim() || null, t.email?.trim() || null)
+          const qualJson = t.qualification ? (typeof t.qualification === 'string' ? t.qualification : JSON.stringify(t.qualification)) : null
+          const existing = existsStmt.get(t.full_name.trim())
+          if (existing) {
+            updateStmt.run(t.phone?.trim() || null, t.email?.trim() || null, t.gender || null, qualJson, t.subject_specialty_id || null, existing.id)
+          } else {
+            insertStmt.run(generateTeacherUID(getSchoolPrefix(db)), t.full_name.trim(), t.phone?.trim() || null, t.email?.trim() || null, t.gender || null, qualJson, t.subject_specialty_id || null)
+          }
         }
       })()
     }
@@ -720,13 +871,12 @@ router.get('/student-template/:classroomId', (req, res) => {
   const headers = ['Nom complet', 'Sexe (M/F)']
   if (mode === 'educmaster') headers.push('Matricule Educmaster')
   else if (mode === 'manual') headers.push('Matricule (optionnel)')
-  headers.push('Date de naissance', 'Lieu de naissance', 'Nom du tuteur', 'Téléphone tuteur')
+  headers.push('Date de naissance', 'Lieu de naissance', 'Nationalité', 'Redoublant (O/N)', 'Nom du tuteur', 'Relation tuteur', 'Téléphone tuteur')
 
   const wb = XLSX.utils.book_new()
   const ws = XLSX.utils.aoa_to_sheet([headers])
 
-  // Set column widths
-  ws['!cols'] = headers.map(() => ({ wch: 22 }))
+  ws['!cols'] = headers.map((h) => ({ wch: h.length < 12 ? 14 : 22 }))
 
   XLSX.utils.book_append_sheet(wb, ws, classroom.label || 'Élèves')
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
@@ -778,8 +928,10 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
     const errors = []
     const valid = []
 
-    // Get existing student count for auto-matricule
-    let seqNum = db.prepare('SELECT COUNT(*) as cnt FROM students').get()?.cnt || 0
+    // Get highest existing sequence number for auto-matricule
+    // Use AUTOINCREMENT-style: find max id in students table to guarantee uniqueness even after deletions
+    const maxId = db.prepare("SELECT MAX(id) as m FROM students").get()?.m || 0
+    let seqNum = maxId
 
     rows.forEach((row, i) => {
       const name = (row['Nom complet'] || '').trim()
@@ -800,13 +952,19 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
         matricule = `${schoolCode}/${year}/${String(seqNum).padStart(4, '0')}`
       }
 
+      const redoublantRaw = (row['Redoublant (O/N)'] || row['Redoublant'] || '').toString().trim().toUpperCase()
+      const isRedoublant = ['O', 'OUI', 'Y', 'YES', '1'].includes(redoublantRaw) ? 1 : 0
+
       valid.push({
         full_name: name,
         gender: gender || null,
         matricule,
         birth_date: (row['Date de naissance'] || '').toString().trim() || null,
         birth_place: (row['Lieu de naissance'] || '').toString().trim() || null,
+        nationality: (row['Nationalité'] || row['Nationalite'] || '').toString().trim() || null,
+        is_redoublant: isRedoublant,
         guardian_name: (row['Nom du tuteur'] || '').toString().trim() || null,
+        guardian_relationship: (row['Relation tuteur'] || '').toString().trim() || null,
         guardian_phone: (row['Téléphone tuteur'] || '').toString().trim() || null,
       })
     })
@@ -817,26 +975,27 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
 
     // Insert students + enrollments + guardians
     const studentStmt = db.prepare(`
-      INSERT INTO students (student_uid, matricule, full_name, birth_date, birth_place, gender)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO students (student_uid, matricule, full_name, birth_date, birth_place, gender, nationality, is_redoublant)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const enrollStmt = db.prepare(`
       INSERT INTO enrollments (enrollment_uid, student_id, classroom_id, academic_year_id)
       VALUES (?, ?, ?, ?)
     `)
     const guardianStmt = db.prepare(`
-      INSERT INTO guardians (student_id, full_name, phone, is_primary)
-      VALUES (?, ?, ?, 1)
+      INSERT INTO guardians (student_id, full_name, phone, relationship, is_primary)
+      VALUES (?, ?, ?, ?, 1)
     `)
 
     let imported = 0
+    const prefix = getSchoolPrefix(db)
     db.transaction(() => {
       for (const s of valid) {
-        const result = studentStmt.run(generateUUID(), s.matricule, s.full_name, s.birth_date, s.birth_place, s.gender)
+        const result = studentStmt.run(generateStudentUID(prefix), s.matricule, s.full_name, s.birth_date, s.birth_place, s.gender, s.nationality, s.is_redoublant)
         const studentId = result.lastInsertRowid
         enrollStmt.run(generateUUID(), studentId, classroomId, yearId)
         if (s.guardian_name) {
-          guardianStmt.run(studentId, s.guardian_name, s.guardian_phone)
+          guardianStmt.run(studentId, s.guardian_name, s.guardian_phone, s.guardian_relationship)
         }
         imported++
       }
@@ -852,6 +1011,40 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
     console.error('[UPLOAD STUDENTS]', err)
     return res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
   }
+})
+
+// ─── GET /api/onboarding/class-students/:classroomId — Preview students in class ─
+router.get('/class-students/:classroomId', (req, res) => {
+  const db = getDb()
+  const students = db.prepare(`
+    SELECT s.id, s.full_name, s.gender, s.birth_date, s.birth_place, s.nationality, s.is_redoublant, s.matricule,
+           g.full_name AS guardian_name, g.relationship AS guardian_relationship, g.phone AS guardian_phone
+    FROM enrollments e
+    JOIN students s ON s.id = e.student_id
+    LEFT JOIN guardians g ON g.student_id = s.id AND g.is_primary = 1 AND g.is_deleted = 0
+    WHERE e.classroom_id = ? AND e.is_deleted = 0 AND s.is_deleted = 0
+    ORDER BY s.full_name
+  `).all(req.params.classroomId)
+  return res.json({ students })
+})
+
+// ─── DELETE /api/onboarding/class-students/:classroomId — Clear students for re-upload ─
+router.delete('/class-students/:classroomId', (req, res) => {
+  const db = getDb()
+  const classroomId = parseInt(req.params.classroomId)
+  const enrollments = db.prepare('SELECT student_id FROM enrollments WHERE classroom_id = ? AND is_deleted = 0').all(classroomId)
+
+  if (enrollments.length === 0) return res.json({ success: true, deleted: 0 })
+
+  db.transaction(() => {
+    for (const e of enrollments) {
+      db.prepare('DELETE FROM guardians WHERE student_id = ?').run(e.student_id)
+      db.prepare('DELETE FROM enrollments WHERE student_id = ? AND classroom_id = ?').run(e.student_id, classroomId)
+      db.prepare('DELETE FROM students WHERE id = ?').run(e.student_id)
+    }
+  })()
+
+  return res.json({ success: true, deleted: enrollments.length })
 })
 
 // ─── POST /api/onboarding/step10 — Advance after student import ─

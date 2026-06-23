@@ -22,14 +22,35 @@ function storeLicenseLocally(db, payload, fingerprint) {
       db.prepare(`
         UPDATE license_state SET
           school_id = ?, hardware_fingerprint = ?, license_tier = ?,
-          license_expiry = ?, is_active = 1, updated_at = datetime('now')
+          license_expiry = ?, is_active = 1,
+          rate_per_student = ?, declared_student_count = ?,
+          paid_student_count = ?, allowed_students = ?,
+          amount_paid = ?, installation_fee = ?,
+          installation_fee_paid = ?, semesters_active = ?,
+          updated_at = datetime('now')
         WHERE id = ?
-      `).run(payload.school_id, fingerprint, payload.tier, payload.expiry_date, existing.id)
+      `).run(
+        payload.school_id, fingerprint, payload.tier, payload.expiry_date,
+        payload.rate_per_student || 0, payload.declared_student_count || 0,
+        payload.paid_student_count || 0, payload.allowed_students || 0,
+        payload.amount_paid || 0, payload.installation_fee || 0,
+        payload.installation_fee_paid ? 1 : 0, payload.semesters_active || 3,
+        existing.id
+      )
     } else {
       db.prepare(`
-        INSERT INTO license_state (school_id, hardware_fingerprint, license_tier, license_expiry, is_active)
-        VALUES (?, ?, ?, ?, 1)
-      `).run(payload.school_id, fingerprint, payload.tier, payload.expiry_date)
+        INSERT INTO license_state (
+          school_id, hardware_fingerprint, license_tier, license_expiry, is_active,
+          rate_per_student, declared_student_count, paid_student_count, allowed_students,
+          amount_paid, installation_fee, installation_fee_paid, semesters_active
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        payload.school_id, fingerprint, payload.tier, payload.expiry_date,
+        payload.rate_per_student || 0, payload.declared_student_count || 0,
+        payload.paid_student_count || 0, payload.allowed_students || 0,
+        payload.amount_paid || 0, payload.installation_fee || 0,
+        payload.installation_fee_paid ? 1 : 0, payload.semesters_active || 3
+      )
     }
 
     // Upsert school_config
@@ -37,21 +58,20 @@ function storeLicenseLocally(db, payload, fingerprint) {
     if (existingConfig) {
       db.prepare(`
         UPDATE school_config SET
-          school_name = ?, school_code = ?, director_name = ?,
+          school_name = ?, school_code = ?, school_prefix = ?, director_name = ?,
           city = ?, country = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).run(payload.school_name, payload.school_code, payload.director_name, payload.city || '', payload.country || 'Bénin', existingConfig.id)
+      `).run(payload.school_name, payload.school_code, payload.school_prefix || '', payload.director_name, payload.city || '', payload.country || 'Bénin', existingConfig.id)
     } else {
       db.prepare(`
-        INSERT INTO school_config (school_name, school_code, director_name, city, country)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(payload.school_name, payload.school_code, payload.director_name, payload.city || '', payload.country || 'Bénin')
+        INSERT INTO school_config (school_name, school_code, school_prefix, director_name, city, country)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(payload.school_name, payload.school_code, payload.school_prefix || '', payload.director_name, payload.city || '', payload.country || 'Bénin')
     }
 
     // Store features, deadlines, signature in app_settings
     const settings = {
       license_features: JSON.stringify(payload.features || []),
-      license_size: payload.size || '',
       license_semesters_active: String(payload.semesters_active || 3),
       semester_1_deadline: String(payload.semester_deadlines?.t1 || ''),
       semester_2_deadline: String(payload.semester_deadlines?.t2 || ''),
@@ -108,16 +128,36 @@ router.get('/status', (req, res) => {
   const featuresRaw = db.prepare("SELECT value FROM app_settings WHERE key = 'license_features'").get()?.value
   const features = featuresRaw ? JSON.parse(featuresRaw) : []
 
+  // Live student count
+  const actualStudents = db.prepare("SELECT COUNT(*) as cnt FROM students WHERE is_deleted = 0").get()?.cnt || 0
+
   return res.json({
     activated: true,
     configured: config?.is_configured === 1,
     license_status: licenseStatus,
     school_name: config?.school_name || null,
     school_code: license?.school_id || null,
+    school_prefix: config?.school_prefix || null,
     tier: license?.license_tier || null,
     expiry: license?.license_expiry || null,
     features,
+    actual_student_count: actualStudents,
+    rate_per_student: license?.rate_per_student || 0,
+    declared_student_count: license?.declared_student_count || 0,
+    paid_student_count: license?.paid_student_count || 0,
+    allowed_students: license?.allowed_students || 0,
+    amount_paid: license?.amount_paid || 0,
+    installation_fee: license?.installation_fee || 0,
+    installation_fee_paid: !!license?.installation_fee_paid,
+    semesters_active: license?.semesters_active || 3,
   })
+})
+
+// ─── GET /api/activation/student-count ──────────────────────
+router.get('/student-count', (req, res) => {
+  const db = getDb()
+  const count = db.prepare("SELECT COUNT(*) as cnt FROM students WHERE is_deleted = 0").get()?.cnt || 0
+  return res.json({ count })
 })
 
 // ─── POST /api/activation/activate ──────────────────────────
@@ -159,12 +199,15 @@ router.post('/activate', async (req, res) => {
       school: {
         school_name: payload.school_name,
         school_code: payload.school_code,
+        school_prefix: payload.school_prefix,
         director_name: payload.director_name,
         tier: payload.tier,
-        size: payload.size,
         expiry_date: payload.expiry_date,
         semesters_active: payload.semesters_active,
         features: payload.features,
+        rate_per_student: payload.rate_per_student,
+        declared_student_count: payload.declared_student_count,
+        allowed_students: payload.allowed_students,
       },
     })
   } catch (err) {

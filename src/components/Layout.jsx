@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
+import api from '../utils/api.js'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Tableau de bord', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6', perm: null },
@@ -12,8 +14,25 @@ const NAV_ITEMS = [
   { to: '/settings', label: 'Paramètres', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z', perm: 'admin' },
 ]
 
+function StudentCount({ actual = 0, allowed = 0 }) {
+  if (!allowed) return null
+  const over = actual > allowed
+  return (
+    <span className={`text-xs font-medium ${over ? 'text-red-600' : 'text-brand'}`}>
+      {actual} / {allowed} élèves
+    </span>
+  )
+}
+
 export default function Layout({ schoolInfo }) {
   const { user, logout, hasPermission } = useAuth()
+  const [actualStudents, setActualStudents] = useState(0)
+
+  useEffect(() => {
+    api.get('/api/grades/dashboard/stats').then(res => {
+      setActualStudents(res.data.total_students || 0)
+    }).catch(() => {})
+  }, [])
 
   const visibleItems = NAV_ITEMS.filter(item => {
     if (!item.perm) return true
@@ -27,19 +46,14 @@ export default function Layout({ schoolInfo }) {
       <aside className="w-56 bg-steel-800 flex flex-col shrink-0">
         <div className="p-4 border-b border-steel-700">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-steel-900 rounded-xl flex items-center justify-center">
-              <span className="text-brand-200 text-sm font-semibold">S</span>
-            </div>
-            <div className="min-w-0">
-              <p className="text-steel-200 font-medium text-xs truncate">{schoolInfo?.school_name || 'ScolaDesk'}</p>
-              <p className="text-steel-500 text-[10px]">{schoolInfo?.school_code || ''}</p>
-            </div>
+            <img src="/favicon-32x32.png" alt="ScolaDesk" className="w-9 h-9 rounded-xl" />
+            <span className="text-steel-200 font-semibold text-sm">ScolaDesk</span>
           </div>
         </div>
 
         <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
           {visibleItems.map(item => (
-            <NavLink key={item.to} to={item.to}
+            <NavLink key={item.to} to={item.to} end={item.to === '/dashboard'}
               className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
                 isActive ? 'bg-steel-700/50 text-steel-200' : 'text-steel-400 hover:text-steel-200 hover:bg-steel-700/30'
               }`}>
@@ -71,16 +85,16 @@ export default function Layout({ schoolInfo }) {
         {/* Top bar */}
         <header className="h-12 bg-white border-b border-steel-200 flex items-center justify-between px-6 shrink-0">
           <div className="flex items-center gap-3">
-            <span className="text-sm text-steel-700 font-medium">{schoolInfo?.tier || ''}</span>
-            {schoolInfo?.features?.length > 0 && (
-              <span className="text-xs text-steel-400">
-                {schoolInfo.features.length} fonctionnalité(s)
-              </span>
+            <span className="text-sm text-steel-800 font-semibold">{schoolInfo?.school_name || ''}</span>
+            {schoolInfo?.tier && (
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                schoolInfo.tier === 'PRO' ? 'bg-brand/10 text-brand' : 'bg-steel-100 text-steel-600'
+              }`}>{schoolInfo.tier}</span>
             )}
-          </div>
-          <div className="flex items-center gap-3 text-xs text-steel-500">
-            <span>{user?.fullName}</span>
-            <span className="px-2 py-0.5 bg-steel-100 rounded text-steel-600">{user?.roleLabel}</span>
+            {schoolInfo?.features?.length > 0 && (
+              <span className="text-xs text-steel-400">{schoolInfo.features.length} module(s)</span>
+            )}
+            <StudentCount actual={actualStudents} allowed={schoolInfo?.allowed_students} />
           </div>
         </header>
 

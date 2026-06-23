@@ -3,7 +3,7 @@ const router = express.Router()
 const { getDb } = require('../db/init')
 const { hashPassword, verifyPassword } = require('../utils/password')
 const { signToken } = require('../utils/jwt')
-const { generateUUID, generateShortUID } = require('../utils/uid')
+const { generateUUID, generateShortUID, generateUserUID, getSchoolPrefix } = require('../utils/uid')
 const { requireAuth } = require('../middleware/requireAuth')
 
 // ─── POST /api/auth/login ─────────────────────────────────────────
@@ -79,6 +79,17 @@ router.post('/login', async (req, res) => {
       VALUES (?, 'LOGIN_SUCCESS', 'user', ?, ?)
     `).run(user.id, String(user.id), req.ip)
 
+        // Load permissions
+        let permissions = ['*']
+        if (user.role_name !== 'admin') {
+            const perms = db.prepare(`
+                SELECT p.code FROM role_permissions rp
+                JOIN permissions p ON p.id = rp.permission_id
+                WHERE rp.role_id = ?
+            `).all(user.role_id)
+            permissions = perms.map(p => p.code)
+        }
+
         return res.json({
             token,
             user: {
@@ -87,7 +98,8 @@ router.post('/login', async (req, res) => {
                 fullName: user.full_name,
                 username: user.username,
                 role: user.role_name,
-                roleLabel: user.role_label
+                roleLabel: user.role_label,
+                permissions
             }
         })
     } catch (err) {
@@ -173,7 +185,7 @@ router.post('/setup', async (req, res) => {
         }
 
         const passwordHash = await hashPassword(password)
-        const userUid = generateUUID()
+        const userUid = generateUserUID(getSchoolPrefix(db))
         const matricule = generateShortUID('U')
 
         db.prepare(`
