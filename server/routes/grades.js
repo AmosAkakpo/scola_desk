@@ -1,6 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const XLSX = require('xlsx')
+const archiver = require('archiver')
 const { getDb } = require('../db/init')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
@@ -20,6 +21,75 @@ function getTemplates(db, classroomId, subjectId, yearId, semester) {
       CASE assessment_type WHEN 'interrogation' THEN 1 WHEN 'devoir' THEN 2 WHEN 'composition' THEN 3 WHEN 'tp' THEN 4 WHEN 'oral' THEN 5 END,
       sequence_number
   `).all(classroomId, subjectId, yearId, semester)
+}
+
+// Subjects of a classroom (respects serie). Returns [{ subject_id, subject_name }] sorted A-Z.
+function getClassroomSubjects(db, classroomId) {
+  const classroom = db.prepare('SELECT level_id, serie_id FROM classrooms WHERE id = ?').get(classroomId)
+  if (!classroom) return []
+  return classroom.serie_id
+    ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+         WHERE ls.level_id = ? AND ls.is_active = 1 AND (ls.serie_id = ? OR ls.serie_id IS NULL) ORDER BY s.name`).all(classroom.level_id, classroom.serie_id)
+    : db.prepare(`SELECT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+         WHERE ls.level_id = ? AND ls.is_active = 1 AND ls.serie_id IS NULL ORDER BY s.name`).all(classroom.level_id)
+}
+
+// Teacher assigned to a class+subject for the year, or 'NA'
+function getTeacherName(db, classroomId, subjectId, yearId) {
+  const row = db.prepare(`
+    SELECT t.full_name FROM teacher_schedule ts JOIN teachers t ON t.id = ts.teacher_id
+    WHERE ts.classroom_id = ? AND ts.subject_id = ? AND ts.academic_year_id = ? LIMIT 1
+  `).get(classroomId, subjectId, yearId)
+  return row?.full_name || 'NA'
+}
+
+const cleanFilePart = (s) => (s || '').toString().replace(/[^a-zA-Z0-9À-ÿ]+/g, '-').replace(/^-+|-+$/g, '') || 'NA'
+
+// Build one xlsx buffer for a class+subject+semester. Returns null if no templates.
+// Sheet "Notes" = student rows (A-Z) + grade columns; hidden "_meta" = ids for import.
+function buildSheetWorkbook(db, ctx) {
+  const { classroomId, subjectId, semester, yearId, className, subjectName, teacherName, yearLabel } = ctx
+  const templates = getTemplates(db, classroomId, subjectId, yearId, semester)
+  if (templates.length === 0) return null
+
+  const students = db.prepare(`
+    SELECT s.id, s.full_name, s.matricule FROM students s
+    JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
+    WHERE s.is_deleted = 0 ORDER BY s.full_name
+  `).all(classroomId)
+
+  const scoreMap = {}
+  const scoreRows = db.prepare(`
+    SELECT template_id, student_id, score, is_absent FROM assessment_scores
+    WHERE template_id IN (${templates.map(() => '?').join(',')}) AND is_deleted = 0
+  `).all(...templates.map(t => t.id))
+  scoreRows.forEach(r => { scoreMap[`${r.template_id}_${r.student_id}`] = r })
+
+  const headers = ['Nom complet', 'Matricule', ...templates.map(t => `${templateLabel(t)} /${t.max_score}`)]
+  const data = [headers]
+  for (const st of students) {
+    const row = [st.full_name, st.matricule || '']
+    for (const t of templates) {
+      const sc = scoreMap[`${t.id}_${st.id}`]
+      row.push(sc ? (sc.is_absent === 1 ? 'ABS' : (sc.score ?? '')) : '')
+    }
+    data.push(row)
+  }
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet(data)
+  ws['!cols'] = headers.map((h, i) => ({ wch: i === 0 ? 26 : (i === 1 ? 20 : Math.max(h.length + 1, 10)) }))
+  XLSX.utils.book_append_sheet(wb, ws, 'Notes')
+
+  // Hidden meta sheet drives import even if the file is renamed
+  const meta = XLSX.utils.aoa_to_sheet([
+    ['year_id', yearId], ['classroom_id', classroomId], ['subject_id', subjectId], ['semester', semester],
+    ['annee', yearLabel || ''], ['classe', className || ''], ['matiere', subjectName || ''], ['enseignant', teacherName || ''],
+  ])
+  XLSX.utils.book_append_sheet(wb, meta, '_meta')
+  wb.Workbook = { Sheets: [{ Hidden: 0 }, { Hidden: 2 }] } // _meta very-hidden
+
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
 }
 
 function getAppreciationScale(db) {
@@ -246,73 +316,96 @@ router.post('/batch', requirePermission('grades.edit'), (req, res) => {
   return res.json({ success: true, saved })
 })
 
-// ─── GET /api/grades/template/:classroomId/:subjectId/:semester — Excel template ─
-router.get('/template/:classroomId/:subjectId/:semester', requirePermission('grades.view'), (req, res) => {
+// ─── GET /api/grades/sheet-options — Classes + semesters for bulk download ─
+router.get('/sheet-options', requirePermission('grades.view'), (req, res) => {
   const db = getDb()
-  const { classroomId, subjectId, semester } = req.params
   const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
-
-  const classroom = db.prepare('SELECT label FROM classrooms WHERE id = ? AND is_deleted = 0').get(classroomId)
-  const subject = db.prepare('SELECT name FROM subjects WHERE id = ?').get(subjectId)
-  if (!classroom || !subject) return res.status(404).json({ error: 'NOT_FOUND' })
-
-  const templates = getTemplates(db, classroomId, subjectId, yearId, semester)
-  if (templates.length === 0) return res.status(400).json({ error: 'NO_TEMPLATES', message: 'Aucune évaluation configurée pour cette matière' })
-
-  const students = db.prepare(`
-    SELECT s.id, s.full_name, s.matricule FROM students s
-    JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
-    WHERE s.is_deleted = 0 ORDER BY s.full_name
-  `).all(classroomId)
-
-  // Existing scores so the teacher sees/corrects what is already entered
-  const scoreMap = {}
-  if (templates.length > 0) {
-    const rows = db.prepare(`
-      SELECT template_id, student_id, score, is_absent FROM assessment_scores
-      WHERE template_id IN (${templates.map(() => '?').join(',')}) AND is_deleted = 0
-    `).all(...templates.map(t => t.id))
-    rows.forEach(r => { scoreMap[`${r.template_id}_${r.student_id}`] = r })
-  }
-
-  const headers = ['Matricule', 'Nom complet', ...templates.map(t => `${templateLabel(t)} /${t.max_score}`)]
-  const data = [headers]
-  for (const st of students) {
-    const row = [st.matricule || '', st.full_name]
-    for (const t of templates) {
-      const sc = scoreMap[`${t.id}_${st.id}`]
-      row.push(sc ? (sc.is_absent === 1 ? 'ABS' : (sc.score ?? '')) : '')
-    }
-    data.push(row)
-  }
-
-  const wb = XLSX.utils.book_new()
-  const ws = XLSX.utils.aoa_to_sheet(data)
-  ws['!cols'] = headers.map((h, i) => ({ wch: i === 1 ? 24 : (i === 0 ? 18 : Math.max(h.length + 1, 10)) }))
-  XLSX.utils.book_append_sheet(wb, ws, 'Notes')
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
-
-  const fname = `${classroom.label}_${subject.name}_T${semester}`.replace(/[^a-zA-Z0-9_]/g, '_')
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-  res.setHeader('Content-Disposition', `attachment; filename="${fname}.xlsx"`)
-  return res.send(buf)
+  const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
+  const classrooms = db.prepare(`
+    SELECT c.id, c.label, l.name AS level_name, l.display_order
+    FROM classrooms c JOIN levels l ON l.id = c.level_id
+    WHERE c.academic_year_id = ? AND c.is_deleted = 0
+    ORDER BY l.display_order, c.label
+  `).all(yearId || 0)
+  return res.json({ classrooms, periode_count: periodeCount })
 })
 
-// ─── POST /api/grades/upload/:classroomId/:subjectId/:semester — Import filled Excel ─
-router.post('/upload/:classroomId/:subjectId/:semester', express.raw({ type: '*/*', limit: '10mb' }), requirePermission('grades.edit'), (req, res) => {
+// ─── POST /api/grades/bulk-sheets — ZIP of fiches (1 file per class×subject×semester) ─
+// body: { semesters: [1,2], classroom_ids: [3,4] }
+router.post('/bulk-sheets', requirePermission('grades.view'), (req, res) => {
+  const db = getDb()
+  const { semesters, classroom_ids } = req.body
+  if (!Array.isArray(semesters) || !semesters.length || !Array.isArray(classroom_ids) || !classroom_ids.length) {
+    return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Sélectionnez au moins un trimestre et une classe' })
+  }
+
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const yearLabel = db.prepare('SELECT label FROM academic_years WHERE id = ?').get(yearId)?.label || ''
+  const yearTag = cleanFilePart(yearLabel)
+
+  // Pre-build all file buffers so we can fail cleanly with JSON if nothing is generated
+  const files = []
+  for (const cid of classroom_ids) {
+    const classroom = db.prepare('SELECT label FROM classrooms WHERE id = ? AND is_deleted = 0').get(cid)
+    if (!classroom) continue
+    const subjects = getClassroomSubjects(db, cid)
+    for (const sem of semesters) {
+      for (const sub of subjects) {
+        const teacherName = getTeacherName(db, cid, sub.subject_id, yearId)
+        const buf = buildSheetWorkbook(db, {
+          classroomId: cid, subjectId: sub.subject_id, semester: sem, yearId,
+          className: classroom.label, subjectName: sub.subject_name, teacherName, yearLabel,
+        })
+        if (!buf) continue
+        const name = `${yearTag}_${cleanFilePart(classroom.label)}_${cleanFilePart(sub.subject_name)}_${cleanFilePart(teacherName)}_T${sem}.xlsx`
+        files.push({ name, buf })
+      }
+    }
+  }
+
+  if (files.length === 0) return res.status(400).json({ error: 'NO_SHEETS', message: 'Aucune fiche à générer (évaluations non configurées ?)' })
+
+  res.setHeader('Content-Type', 'application/zip')
+  res.setHeader('Content-Disposition', `attachment; filename="fiches_notes_${yearTag}.zip"`)
+  const archive = archiver('zip', { zlib: { level: 9 } })
+  archive.on('error', () => { try { res.status(500).end() } catch { /* already streaming */ } })
+  archive.pipe(res)
+  for (const f of files) archive.append(f.buf, { name: f.name })
+  archive.finalize()
+})
+
+// ─── POST /api/grades/import-sheet — Import one filled fiche (meta-driven) ─
+router.post('/import-sheet', express.raw({ type: '*/*', limit: '10mb' }), requirePermission('grades.edit'), (req, res) => {
   try {
     const db = getDb()
-    const { classroomId, subjectId, semester } = req.params
     const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+
+    let wb
+    try { wb = XLSX.read(req.body) } catch { return res.status(400).json({ error: 'BAD_FILE', message: 'Fichier illisible' }) }
+
+    const metaSheet = wb.Sheets['_meta']
+    if (!metaSheet) return res.status(400).json({ error: 'NO_META', message: 'Fichier non reconnu — utilisez une fiche générée par le système' })
+    const meta = {}
+    XLSX.utils.sheet_to_json(metaSheet, { header: 1 }).forEach(([k, v]) => { if (k) meta[k] = v })
+
+    const classroomId = parseInt(meta.classroom_id)
+    const subjectId = parseInt(meta.subject_id)
+    const semester = parseInt(meta.semester)
+    if (!classroomId || !subjectId || !semester) return res.status(400).json({ error: 'BAD_META', message: 'Métadonnées de la fiche invalides' })
+
+    if (parseInt(meta.year_id) !== parseInt(yearId)) {
+      return res.status(400).json({ error: 'WRONG_YEAR', message: `Cette fiche concerne une autre année scolaire (${meta.annee || meta.year_id})` })
+    }
+
+    const classroom = db.prepare('SELECT label FROM classrooms WHERE id = ? AND is_deleted = 0').get(classroomId)
+    if (!classroom) return res.status(400).json({ error: 'NO_CLASS', message: 'Classe introuvable' })
+    const subject = db.prepare('SELECT name FROM subjects WHERE id = ?').get(subjectId)
 
     const templates = getTemplates(db, classroomId, subjectId, yearId, semester)
     if (templates.length === 0) return res.status(400).json({ error: 'NO_TEMPLATES', message: 'Aucune évaluation configurée' })
-
-    // Map normalized column label -> template
     const labelToTemplate = {}
     templates.forEach(t => { labelToTemplate[templateLabel(t).toLowerCase()] = t })
 
-    // Students for this class, matchable by matricule or name
     const students = db.prepare(`
       SELECT s.id, s.full_name, s.matricule FROM students s
       JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
@@ -324,11 +417,8 @@ router.post('/upload/:classroomId/:subjectId/:semester', express.raw({ type: '*/
       byName[s.full_name.trim().toLowerCase()] = s.id
     })
 
-    const wb = XLSX.read(req.body)
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
-    if (rows.length === 0) return res.status(400).json({ error: 'EMPTY', message: 'Fichier vide' })
-
-    // Strip trailing "/NN" + whitespace from headers to recover the base label
+    const notesSheet = wb.Sheets['Notes'] || wb.Sheets[wb.SheetNames.find(n => n !== '_meta')]
+    const rows = XLSX.utils.sheet_to_json(notesSheet)
     const baseLabel = (key) => key.replace(/\s*\/\s*\d+\s*$/, '').trim().toLowerCase()
 
     const upsert = db.prepare(`
@@ -348,26 +438,28 @@ router.post('/upload/:classroomId/:subjectId/:semester', express.raw({ type: '*/
         const studentId = byMatricule[matricule] || byName[name]
         if (!studentId) { errors.push({ row: i + 2, message: `Élève introuvable: ${row['Nom complet'] || row['Matricule'] || '?'}` }); return }
         matched++
-
         for (const [key, val] of Object.entries(row)) {
           const tpl = labelToTemplate[baseLabel(key)]
-          if (!tpl) continue // skips Matricule/Nom complet and unknown columns
+          if (!tpl) continue
           const raw = (val ?? '').toString().trim().toUpperCase()
-          if (raw === '') continue // blank = leave untouched
+          if (raw === '') continue
           if (raw === 'ABS' || raw === 'A') { upsert.run(tpl.id, studentId, null, 1, req.user.id); saved++; continue }
           const num = parseFloat(raw.replace(',', '.'))
           if (isNaN(num)) { errors.push({ row: i + 2, message: `Valeur invalide "${val}" (${key})` }); continue }
-          if (num < 0 || num > tpl.max_score) { errors.push({ row: i + 2, message: `Note hors barème: ${num} (max ${tpl.max_score}, ${key})` }); continue }
+          if (num < 0 || num > tpl.max_score) { errors.push({ row: i + 2, message: `Note hors barème: ${num} (max ${tpl.max_score})` }); continue }
           upsert.run(tpl.id, studentId, num, 0, req.user.id)
           saved++
         }
       })
     })()
 
-    return res.json({ success: true, saved, matched, total_rows: rows.length, errors })
+    return res.json({
+      success: true, saved, matched, total_rows: rows.length, errors,
+      classe: classroom.label, matiere: subject?.name || meta.matiere, semester, enseignant: meta.enseignant || '',
+    })
   } catch (err) {
-    console.error('[GRADES UPLOAD]', err)
-    return res.status(500).json({ error: 'PARSE_ERROR', message: 'Impossible de lire le fichier Excel' })
+    console.error('[GRADES IMPORT SHEET]', err)
+    return res.status(500).json({ error: 'PARSE_ERROR', message: 'Impossible de lire le fichier' })
   }
 })
 

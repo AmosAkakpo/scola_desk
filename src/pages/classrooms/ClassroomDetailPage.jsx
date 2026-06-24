@@ -9,6 +9,9 @@ export default function ClassroomDetailPage() {
   const [students, setStudents] = useState([])
   const [teachers, setTeachers] = useState([])
   const [allClassrooms, setAllClassrooms] = useState([])
+  const [subjects, setSubjects] = useState([])
+  const [teacherList, setTeacherList] = useState([])
+  const [savingSubject, setSavingSubject] = useState(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('students')
   const [selected, setSelected] = useState([])
@@ -17,18 +20,30 @@ export default function ClassroomDetailPage() {
   const [editForm, setEditForm] = useState({})
 
   async function fetchData() {
-    const [detailRes, listRes] = await Promise.all([
+    const [detailRes, listRes, assignRes] = await Promise.all([
       api.get(`/api/classrooms/${id}`),
       api.get('/api/classrooms'),
+      api.get(`/api/classrooms/${id}/assignments`),
     ])
     setClassroom(detailRes.data.classroom)
     setStudents(detailRes.data.students || [])
     setTeachers(detailRes.data.teachers || [])
     setAllClassrooms((listRes.data.classrooms || []).filter(c => c.id !== parseInt(id)))
+    setSubjects(assignRes.data.subjects || [])
+    setTeacherList(assignRes.data.teachers || [])
     setLoading(false)
   }
 
   useEffect(() => { fetchData() }, [id])
+
+  async function assignTeacher(subjectId, teacherId) {
+    setSavingSubject(subjectId)
+    // optimistic local update
+    setSubjects(prev => prev.map(s => s.subject_id === subjectId ? { ...s, teacher_id: teacherId || null } : s))
+    await api.post(`/api/classrooms/${id}/assignments`, { subject_id: subjectId, teacher_id: teacherId || null })
+    await fetchData()
+    setSavingSubject(null)
+  }
 
   function toggleSelect(sid) {
     setSelected(prev => prev.includes(sid) ? prev.filter(x => x !== sid) : [...prev, sid])
@@ -103,6 +118,7 @@ export default function ClassroomDetailPage() {
       <div className="flex gap-1 border-b border-steel-200">
         {[
           { key: 'students', label: `Élèves (${students.length})` },
+          { key: 'subjects', label: `Matières (${subjects.length})` },
           { key: 'teachers', label: `Enseignants (${teachers.length})` },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -159,6 +175,42 @@ export default function ClassroomDetailPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Subjects Tab — assign a teacher per subject */}
+      {tab === 'subjects' && (
+        <div className="bg-white rounded-xl border border-steel-200 overflow-hidden">
+          {subjects.length === 0 ? (
+            <p className="px-4 py-8 text-center text-steel-400 text-sm">Aucune matière configurée pour ce niveau</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-steel-200 bg-steel-50">
+                  <th className="text-left px-4 py-3 text-steel-500 font-medium">Matière</th>
+                  <th className="text-left px-4 py-3 text-steel-500 font-medium">Enseignant</th>
+                </tr>
+              </thead>
+              <tbody>
+                {subjects.map(s => (
+                  <tr key={s.subject_id} className="border-b border-steel-100">
+                    <td className="px-4 py-3 text-steel-800">{s.subject_name}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <select value={s.teacher_id || ''} onChange={e => assignTeacher(s.subject_id, e.target.value ? parseInt(e.target.value) : null)}
+                          disabled={savingSubject === s.subject_id}
+                          className="px-3 py-1.5 border border-steel-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand disabled:opacity-50 min-w-[220px]">
+                          <option value="">— Non assigné —</option>
+                          {teacherList.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+                        </select>
+                        {savingSubject === s.subject_id && <span className="text-xs text-brand animate-pulse">...</span>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

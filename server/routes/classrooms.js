@@ -125,6 +125,50 @@ router.delete('/:id', requirePermission('students.edit'), (req, res) => {
   return res.json({ success: true })
 })
 
+// ─── GET /api/classrooms/:id/assignments — Subjects + assigned teacher + teacher list ─
+router.get('/:id/assignments', requirePermission('students.view'), (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const classroom = db.prepare('SELECT level_id, serie_id FROM classrooms WHERE id = ? AND is_deleted = 0').get(req.params.id)
+  if (!classroom) return res.status(404).json({ error: 'NOT_FOUND' })
+
+  const subjects = classroom.serie_id
+    ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+         WHERE ls.level_id = ? AND ls.is_active = 1 AND (ls.serie_id = ? OR ls.serie_id IS NULL) ORDER BY s.name`).all(classroom.level_id, classroom.serie_id)
+    : db.prepare(`SELECT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+         WHERE ls.level_id = ? AND ls.is_active = 1 AND ls.serie_id IS NULL ORDER BY s.name`).all(classroom.level_id)
+
+  const assignStmt = db.prepare('SELECT teacher_id FROM teacher_schedule WHERE classroom_id = ? AND subject_id = ? AND academic_year_id = ? LIMIT 1')
+  for (const s of subjects) {
+    s.teacher_id = assignStmt.get(req.params.id, s.subject_id, yearId || 0)?.teacher_id || null
+  }
+
+  const teachers = db.prepare('SELECT id, full_name FROM teachers WHERE is_active = 1 AND is_deleted = 0 ORDER BY full_name').all()
+  return res.json({ subjects, teachers })
+})
+
+// ─── POST /api/classrooms/:id/assignments — Assign/clear teacher for a subject ─
+router.post('/:id/assignments', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  const { subject_id, teacher_id } = req.body
+  if (!subject_id) return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Matière requise' })
+
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  if (!yearId) return res.status(400).json({ error: 'NO_YEAR', message: 'Année académique non configurée' })
+
+  db.transaction(() => {
+    // One teacher per subject per class: clear existing, then set new
+    db.prepare('DELETE FROM teacher_schedule WHERE classroom_id = ? AND subject_id = ? AND academic_year_id = ?')
+      .run(req.params.id, subject_id, parseInt(yearId))
+    if (teacher_id) {
+      db.prepare('INSERT INTO teacher_schedule (teacher_id, classroom_id, subject_id, academic_year_id) VALUES (?, ?, ?, ?)')
+        .run(teacher_id, req.params.id, subject_id, parseInt(yearId))
+    }
+  })()
+
+  return res.json({ success: true })
+})
+
 // ─── POST /api/classrooms/:id/bulk-transfer — Move multiple students ─
 router.post('/:id/bulk-transfer', requirePermission('students.edit'), (req, res) => {
   const db = getDb()

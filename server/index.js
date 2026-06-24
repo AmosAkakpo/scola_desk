@@ -32,6 +32,7 @@ app.use('/api/classrooms', require('./routes/classrooms'))
 app.use('/api/teachers', require('./routes/teachers'))
 app.use('/api/settings', require('./routes/settings'))
 app.use('/api/grades', require('./routes/grades'))
+app.use('/api/timetable', require('./routes/timetable'))
 app.use('/api/decisions', require('./routes/decisions'))
 app.use('/api/report-cards', require('./routes/reportcards'))
 

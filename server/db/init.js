@@ -78,6 +78,10 @@ function runMigrations() {
         {
             version: '007_license_pricing_fields',
             run: require('./migration/007_license_pricing_fields').migration007
+        },
+        {
+            version: '008_timetable',
+            run: require('./migration/008_timetable').migration008
         }
     ]
 

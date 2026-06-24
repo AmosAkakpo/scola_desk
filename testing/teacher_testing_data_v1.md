@@ -2,18 +2,19 @@
 
 ## School Structure Recap
 
-### Classes (18 total)
-| Level   | Serie | Classes          |
-|---------|-------|------------------|
-| 6ème    | —     | 6ème A, 6ème B   |
-| 5ème    | —     | 5ème A, 5ème B   |
-| 4ème    | —     | 4ème A, 4ème B   |
-| 3ème    | —     | 3ème A, 3ème B   |
-| 2nde    | —     | 2nde A, 2nde B   |
-| 1ère    | C     | 1ère C1, 1ère C2 |
-| 1ère    | D     | 1ère D1, 1ère D2 |
-| Tle     | C     | Tle C1, Tle C2   |
-| Tle     | D     | Tle D1, Tle D2   |
+### Classes (20 total)
+| Level      | Serie | Classes                          |
+|------------|-------|----------------------------------|
+| 6ème       | —     | 6eme A, 6eme B                   |
+| 5ème       | —     | 5eme A, 5eme B, 5eme C           |
+| 4ème       | —     | 4eme A, 4eme B                   |
+| 3ème       | —     | 3eme A, 3eme B                   |
+| 2nde       | C     | 2nde C1, 2nde C2                 |
+| 2nde       | D     | 2nde D1, 2nde D2                 |
+| 1ère       | C     | 1ere C1, 1ere C2                 |
+| 1ère       | D     | 1ere D1, 1ere D2                 |
+| Terminale  | C     | Terminale C                      |
+| Terminale  | D     | Terminale D1, Terminale D2       |
 
 ### Subjects per Level
 | Subject                | 6è | 5è | 4è | 3è | 2nde | 1è/Tle |
@@ -31,96 +32,346 @@
 | Français               | —  | —  | —  | —  | ✓    | ✓      |
 | Philosophie            | —  | —  | —  | —  | ✓    | ✓      |
 
-*Allemand/Espagnol: each class picks one, the other is set to "—" (not applicable)
+*Allemand/Espagnol: A-classes (4eme A, 3eme A) → Allemand; B-classes (4eme B, 3eme B) → Espagnol.
 
 ---
 
 ## Teachers (35 total)
 
-Each teacher handles ~3-5 classes. Fields: full_name, phone, email.
+Each teacher handles ~3-7 classes. Fields: full_name, phone, email.
 
-### Mathématiques (5 teachers — 18 classes)
+### Mathématiques (5 teachers — 20 classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 1  | ADJOVI Kossi Marcel    | 97010001    | adjovi.marcel@test.bj     | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 2  | HOUNSA Fidèle Gérard  | 97010002    | hounsa.fidele@test.bj     | 4ème A, 4ème B, 3ème A, 3ème B     |
-| 3  | DOSSOU Aimé Patrick    | 97010003    | dossou.aime@test.bj       | 2nde A, 2nde B, 1ère C1, 1ère C2  |
-| 4  | AGBANGLA Raoul Sènou  | 97010004    | agbangla.raoul@test.bj    | 1ère D1, 1ère D2, Tle C1, Tle C2  |
-| 5  | TOKPO Bienvenu Codjo   | 97010005    | tokpo.bienvenu@test.bj    | Tle D1, Tle D2                     |
+| 1  | ADJOVI Kossi Marcel    | 97010001    | adjovi.marcel@test.bj     | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 2  | HOUNSA Fidèle Gérard  | 97010002    | hounsa.fidele@test.bj     | 4eme A, 4eme B, 3eme A, 3eme B     |
+| 3  | DOSSOU Aimé Patrick    | 97010003    | dossou.aime@test.bj       | 2nde C1, 2nde C2, 2nde D1, 2nde D2 |
+| 4  | AGBANGLA Raoul Sènou  | 97010004    | agbangla.raoul@test.bj    | 1ere C1, 1ere C2, 1ere D1, 1ere D2 |
+| 5  | TOKPO Bienvenu Codjo   | 97010005    | tokpo.bienvenu@test.bj    | Terminale C, Terminale D1, Terminale D2 |
 
-### Anglais (4 teachers — 18 classes)
+### Anglais (4 teachers — 20 classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 6  | AHOUANSOU Judith Afi   | 97020001    | ahouansou.judith@test.bj  | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 7  | KIKI Arnaud Sègla      | 97020002    | kiki.arnaud@test.bj       | 4ème A, 4ème B, 3ème A, 3ème B     |
-| 8  | GBAGUIDI Estelle Nayo  | 97020003    | gbaguidi.estelle@test.bj  | 2nde A, 2nde B, 1ère C1, 1ère D1  |
-| 9  | TOSSOU Parfait Djidjo  | 97020004    | tossou.parfait@test.bj    | 1ère C2, 1ère D2, Tle C1, Tle C2, Tle D1, Tle D2 |
+| 6  | AHOUANSOU Judith Afi   | 97020001    | ahouansou.judith@test.bj  | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 7  | KIKI Arnaud Sègla      | 97020002    | kiki.arnaud@test.bj       | 4eme A, 4eme B, 3eme A, 3eme B     |
+| 8  | GBAGUIDI Estelle Nayo  | 97020003    | gbaguidi.estelle@test.bj  | 2nde C1, 2nde C2, 2nde D1, 2nde D2, 1ere C1, 1ere D1 |
+| 9  | TOSSOU Parfait Djidjo  | 97020004    | tossou.parfait@test.bj    | 1ere C2, 1ere D2, Terminale C, Terminale D1, Terminale D2 |
 
-### PCT (4 teachers — 18 classes)
+### PCT (4 teachers — 20 classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 10 | SOGLO Hervé Dah        | 97030001    | soglo.herve@test.bj       | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 11 | ZINSOU Carmelle Afiavi | 97030002    | zinsou.carmelle@test.bj   | 4ème A, 4ème B, 3ème A, 3ème B     |
-| 12 | HOUNKPATIN David Ayéna | 97030003    | hounkpatin.david@test.bj  | 2nde A, 2nde B, 1ère C1, 1ère C2  |
-| 13 | AKPLOGAN Nestor Comlan | 97030004    | akplogan.nestor@test.bj   | 1ère D1, 1ère D2, Tle C1, Tle C2, Tle D1, Tle D2 |
+| 10 | SOGLO Hervé Dah        | 97030001    | soglo.herve@test.bj       | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 11 | ZINSOU Carmelle Afiavi | 97030002    | zinsou.carmelle@test.bj   | 4eme A, 4eme B, 3eme A, 3eme B     |
+| 12 | HOUNKPATIN David Ayéna | 97030003    | hounkpatin.david@test.bj  | 2nde C1, 2nde C2, 2nde D1, 2nde D2, 1ere C1, 1ere C2 |
+| 13 | AKPLOGAN Nestor Comlan | 97030004    | akplogan.nestor@test.bj   | 1ere D1, 1ere D2, Terminale C, Terminale D1, Terminale D2 |
 
-### SVT (4 teachers — 18 classes)
+### SVT (4 teachers — 20 classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 14 | GNIMASSOU Éric Houéfa  | 97040001    | gnimassou.eric@test.bj    | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 15 | BEHANZIN Odile Hansi   | 97040002    | behanzin.odile@test.bj    | 4ème A, 4ème B, 3ème A, 3ème B     |
-| 16 | ADJAKOU Serge Mensah   | 97040003    | adjakou.serge@test.bj     | 2nde A, 2nde B, 1ère C1, 1ère C2  |
-| 17 | ASSOGBA Martine Yawa   | 97040004    | assogba.martine@test.bj   | 1ère D1, 1ère D2, Tle C1, Tle C2, Tle D1, Tle D2 |
+| 14 | GNIMASSOU Éric Houéfa  | 97040001    | gnimassou.eric@test.bj    | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 15 | BEHANZIN Odile Hansi   | 97040002    | behanzin.odile@test.bj    | 4eme A, 4eme B, 3eme A, 3eme B     |
+| 16 | ADJAKOU Serge Mensah   | 97040003    | adjakou.serge@test.bj     | 2nde C1, 2nde C2, 2nde D1, 2nde D2, 1ere C1, 1ere C2 |
+| 17 | ASSOGBA Martine Yawa   | 97040004    | assogba.martine@test.bj   | 1ere D1, 1ere D2, Terminale C, Terminale D1, Terminale D2 |
 
-### Histoire-Géographie (4 teachers — 18 classes)
+### Histoire-Géographie (4 teachers — 20 classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 18 | SOSSA Ignace Todjinou  | 97050001    | sossa.ignace@test.bj      | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 19 | PADONOU Lucienne Sika  | 97050002    | padonou.lucienne@test.bj  | 4ème A, 4ème B, 3ème A, 3ème B     |
-| 20 | HOUNYONOU Abel Coffi   | 97050003    | hounyonou.abel@test.bj    | 2nde A, 2nde B, 1ère C1, 1ère D1  |
-| 21 | KPOSSOU Rachelle Ahui  | 97050004    | kpossou.rachelle@test.bj  | 1ère C2, 1ère D2, Tle C1, Tle C2, Tle D1, Tle D2 |
+| 18 | SOSSA Ignace Todjinou  | 97050001    | sossa.ignace@test.bj      | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 19 | PADONOU Lucienne Sika  | 97050002    | padonou.lucienne@test.bj  | 4eme A, 4eme B, 3eme A, 3eme B     |
+| 20 | HOUNYONOU Abel Coffi   | 97050003    | hounyonou.abel@test.bj    | 2nde C1, 2nde C2, 2nde D1, 2nde D2, 1ere C1, 1ere D1 |
+| 21 | KPOSSOU Rachelle Ahui  | 97050004    | kpossou.rachelle@test.bj  | 1ere C2, 1ere D2, Terminale C, Terminale D1, Terminale D2 |
 
-### EPS (3 teachers — 18 classes)
+### EPS (3 teachers — 20 classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 22 | DAGAN Crespin Sèkpon   | 97060001    | dagan.crespin@test.bj     | 6ème A, 6ème B, 5ème A, 5ème B, 4ème A, 4ème B |
-| 23 | HOUSSOU Prisca Alaba   | 97060002    | houssou.prisca@test.bj    | 3ème A, 3ème B, 2nde A, 2nde B, 1ère C1, 1ère D1 |
-| 24 | VIEYRA Blaise Ahonon   | 97060003    | vieyra.blaise@test.bj     | 1ère C2, 1ère D2, Tle C1, Tle C2, Tle D1, Tle D2 |
+| 22 | DAGAN Crespin Sèkpon   | 97060001    | dagan.crespin@test.bj     | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C, 4eme A, 4eme B |
+| 23 | HOUSSOU Prisca Alaba   | 97060002    | houssou.prisca@test.bj    | 3eme A, 3eme B, 2nde C1, 2nde C2, 2nde D1, 2nde D2, 1ere C1 |
+| 24 | VIEYRA Blaise Ahonon   | 97060003    | vieyra.blaise@test.bj     | 1ere C2, 1ere D1, 1ere D2, Terminale C, Terminale D1, Terminale D2 |
 
-### Lecture (2 teachers — 8 classes, 6è-3è only)
+### Lecture (2 teachers — 9 classes, 6è-3è only)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 25 | QUENUM Florence Adjo   | 97070001    | quenum.florence@test.bj   | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 26 | ZANNOU Hugues Jocelyn  | 97070002    | zannou.hugues@test.bj     | 4ème A, 4ème B, 3ème A, 3ème B     |
+| 25 | QUENUM Florence Adjo   | 97070001    | quenum.florence@test.bj   | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 26 | ZANNOU Hugues Jocelyn  | 97070002    | zannou.hugues@test.bj     | 4eme A, 4eme B, 3eme A, 3eme B     |
 
-### Communication Écrite (2 teachers — 8 classes, 6è-3è only)
+### Communication Écrite (2 teachers — 9 classes, 6è-3è only)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 27 | GANDJI Solange Bômi    | 97080001    | gandji.solange@test.bj    | 6ème A, 6ème B, 5ème A, 5ème B     |
-| 28 | AMOUSSOU Victor Hounsè| 97080002    | amoussou.victor@test.bj   | 4ème A, 4ème B, 3ème A, 3ème B     |
+| 27 | GANDJI Solange Bômi    | 97080001    | gandji.solange@test.bj    | 6eme A, 6eme B, 5eme A, 5eme B, 5eme C |
+| 28 | AMOUSSOU Victor Hounsè| 97080002    | amoussou.victor@test.bj   | 4eme A, 4eme B, 3eme A, 3eme B     |
 
-### Allemand (1 teacher — 4è-3è, ~4 classes)
+### Allemand (1 teacher — A-classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 29 | BOKO Théodore Dansi    | 97090001    | boko.theodore@test.bj     | 4ème A, 3ème A (the "Allemand" classes) |
+| 29 | BOKO Théodore Dansi    | 97090001    | boko.theodore@test.bj     | 4eme A, 3eme A                     |
 
-### Espagnol (1 teacher — 4è-3è, ~4 classes)
+### Espagnol (1 teacher — B-classes)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 30 | MONTCHO Carmen Ayélé   | 97100001    | montcho.carmen@test.bj    | 4ème B, 3ème B (the "Espagnol" classes) |
+| 30 | MONTCHO Carmen Ayélé   | 97100001    | montcho.carmen@test.bj    | 4eme B, 3eme B                     |
 
-### Français (3 teachers — 10 classes, 2nde-Tle only)
+### Français (3 teachers — 11 classes, 2nde-Tle only)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 31 | AÏSSI Roland Gbètoho   | 97110001    | aissi.roland@test.bj      | 2nde A, 2nde B, 1ère C1            |
-| 32 | DJENONTIN Grâce Nonvide| 97110002    | djenontin.grace@test.bj   | 1ère C2, 1ère D1, 1ère D2          |
-| 33 | HOUÉTO Clément Togbé   | 97110003    | houeto.clement@test.bj    | Tle C1, Tle C2, Tle D1, Tle D2     |
+| 31 | AÏSSI Roland Gbètoho   | 97110001    | aissi.roland@test.bj      | 2nde C1, 2nde C2, 2nde D1, 2nde D2 |
+| 32 | DJENONTIN Grâce Nonvide| 97110002    | djenontin.grace@test.bj   | 1ere C1, 1ere C2, 1ere D1, 1ere D2 |
+| 33 | HOUÉTO Clément Togbé   | 97110003    | houeto.clement@test.bj    | Terminale C, Terminale D1, Terminale D2 |
 
-### Philosophie (2 teachers — 10 classes, 2nde-Tle only)
+### Philosophie (2 teachers — 11 classes, 2nde-Tle only)
 | #  | full_name              | phone       | email                     | Assigned Classes                   |
 |----|------------------------|-------------|---------------------------|------------------------------------|
-| 34 | AGOSSOU Félicien Djifa | 97120001    | agossou.felicien@test.bj  | 2nde A, 2nde B, 1ère C1, 1ère C2, 1ère D1 |
-| 35 | FASSINOU Rosine Nansi  | 97120002    | fassinou.rosine@test.bj   | 1ère D2, Tle C1, Tle C2, Tle D1, Tle D2 |
+| 34 | AGOSSOU Félicien Djifa | 97120001    | agossou.felicien@test.bj  | 2nde C1, 2nde C2, 2nde D1, 2nde D2, 1ere C1, 1ere C2 |
+| 35 | FASSINOU Rosine Nansi  | 97120002    | fassinou.rosine@test.bj   | 1ere D1, 1ere D2, Terminale C, Terminale D1, Terminale D2 |
+
+---
+
+## Step 11 — Assignments by Class (subject → teacher)
+
+> Go class by class. For each subject, pick the teacher below.
+
+### 6eme A
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | ADJOVI Kossi Marcel |
+| Anglais | AHOUANSOU Judith Afi |
+| PCT | SOGLO Hervé Dah |
+| SVT | GNIMASSOU Éric Houéfa |
+| Histoire-Géographie | SOSSA Ignace Todjinou |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | QUENUM Florence Adjo |
+| Communication Écrite | GANDJI Solange Bômi |
+
+### 6eme B
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | ADJOVI Kossi Marcel |
+| Anglais | AHOUANSOU Judith Afi |
+| PCT | SOGLO Hervé Dah |
+| SVT | GNIMASSOU Éric Houéfa |
+| Histoire-Géographie | SOSSA Ignace Todjinou |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | QUENUM Florence Adjo |
+| Communication Écrite | GANDJI Solange Bômi |
+
+### 5eme A
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | ADJOVI Kossi Marcel |
+| Anglais | AHOUANSOU Judith Afi |
+| PCT | SOGLO Hervé Dah |
+| SVT | GNIMASSOU Éric Houéfa |
+| Histoire-Géographie | SOSSA Ignace Todjinou |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | QUENUM Florence Adjo |
+| Communication Écrite | GANDJI Solange Bômi |
+
+### 5eme B
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | ADJOVI Kossi Marcel |
+| Anglais | AHOUANSOU Judith Afi |
+| PCT | SOGLO Hervé Dah |
+| SVT | GNIMASSOU Éric Houéfa |
+| Histoire-Géographie | SOSSA Ignace Todjinou |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | QUENUM Florence Adjo |
+| Communication Écrite | GANDJI Solange Bômi |
+
+### 5eme C
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | ADJOVI Kossi Marcel |
+| Anglais | AHOUANSOU Judith Afi |
+| PCT | SOGLO Hervé Dah |
+| SVT | GNIMASSOU Éric Houéfa |
+| Histoire-Géographie | SOSSA Ignace Todjinou |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | QUENUM Florence Adjo |
+| Communication Écrite | GANDJI Solange Bômi |
+
+### 4eme A (Allemand)
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | HOUNSA Fidèle Gérard |
+| Anglais | KIKI Arnaud Sègla |
+| PCT | ZINSOU Carmelle Afiavi |
+| SVT | BEHANZIN Odile Hansi |
+| Histoire-Géographie | PADONOU Lucienne Sika |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | ZANNOU Hugues Jocelyn |
+| Communication Écrite | AMOUSSOU Victor Hounsè |
+| Allemand | BOKO Théodore Dansi |
+
+### 4eme B (Espagnol)
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | HOUNSA Fidèle Gérard |
+| Anglais | KIKI Arnaud Sègla |
+| PCT | ZINSOU Carmelle Afiavi |
+| SVT | BEHANZIN Odile Hansi |
+| Histoire-Géographie | PADONOU Lucienne Sika |
+| EPS | DAGAN Crespin Sèkpon |
+| Lecture | ZANNOU Hugues Jocelyn |
+| Communication Écrite | AMOUSSOU Victor Hounsè |
+| Espagnol | MONTCHO Carmen Ayélé |
+
+### 3eme A (Allemand)
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | HOUNSA Fidèle Gérard |
+| Anglais | KIKI Arnaud Sègla |
+| PCT | ZINSOU Carmelle Afiavi |
+| SVT | BEHANZIN Odile Hansi |
+| Histoire-Géographie | PADONOU Lucienne Sika |
+| EPS | HOUSSOU Prisca Alaba |
+| Lecture | ZANNOU Hugues Jocelyn |
+| Communication Écrite | AMOUSSOU Victor Hounsè |
+| Allemand | BOKO Théodore Dansi |
+
+### 3eme B (Espagnol)
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | HOUNSA Fidèle Gérard |
+| Anglais | KIKI Arnaud Sègla |
+| PCT | ZINSOU Carmelle Afiavi |
+| SVT | BEHANZIN Odile Hansi |
+| Histoire-Géographie | PADONOU Lucienne Sika |
+| EPS | HOUSSOU Prisca Alaba |
+| Lecture | ZANNOU Hugues Jocelyn |
+| Communication Écrite | AMOUSSOU Victor Hounsè |
+| Espagnol | MONTCHO Carmen Ayélé |
+
+### 2nde C1
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | DOSSOU Aimé Patrick |
+| Anglais | GBAGUIDI Estelle Nayo |
+| PCT | HOUNKPATIN David Ayéna |
+| SVT | ADJAKOU Serge Mensah |
+| Histoire-Géographie | HOUNYONOU Abel Coffi |
+| EPS | HOUSSOU Prisca Alaba |
+| Français | AÏSSI Roland Gbètoho |
+| Philosophie | AGOSSOU Félicien Djifa |
+
+### 2nde C2
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | DOSSOU Aimé Patrick |
+| Anglais | GBAGUIDI Estelle Nayo |
+| PCT | HOUNKPATIN David Ayéna |
+| SVT | ADJAKOU Serge Mensah |
+| Histoire-Géographie | HOUNYONOU Abel Coffi |
+| EPS | HOUSSOU Prisca Alaba |
+| Français | AÏSSI Roland Gbètoho |
+| Philosophie | AGOSSOU Félicien Djifa |
+
+### 2nde D1
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | DOSSOU Aimé Patrick |
+| Anglais | GBAGUIDI Estelle Nayo |
+| PCT | HOUNKPATIN David Ayéna |
+| SVT | ADJAKOU Serge Mensah |
+| Histoire-Géographie | HOUNYONOU Abel Coffi |
+| EPS | HOUSSOU Prisca Alaba |
+| Français | AÏSSI Roland Gbètoho |
+| Philosophie | AGOSSOU Félicien Djifa |
+
+### 2nde D2
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | DOSSOU Aimé Patrick |
+| Anglais | GBAGUIDI Estelle Nayo |
+| PCT | HOUNKPATIN David Ayéna |
+| SVT | ADJAKOU Serge Mensah |
+| Histoire-Géographie | HOUNYONOU Abel Coffi |
+| EPS | HOUSSOU Prisca Alaba |
+| Français | AÏSSI Roland Gbètoho |
+| Philosophie | AGOSSOU Félicien Djifa |
+
+### 1ere C1
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | AGBANGLA Raoul Sènou |
+| Anglais | GBAGUIDI Estelle Nayo |
+| PCT | HOUNKPATIN David Ayéna |
+| SVT | ADJAKOU Serge Mensah |
+| Histoire-Géographie | HOUNYONOU Abel Coffi |
+| EPS | HOUSSOU Prisca Alaba |
+| Français | DJENONTIN Grâce Nonvide |
+| Philosophie | AGOSSOU Félicien Djifa |
+
+### 1ere C2
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | AGBANGLA Raoul Sènou |
+| Anglais | TOSSOU Parfait Djidjo |
+| PCT | HOUNKPATIN David Ayéna |
+| SVT | ADJAKOU Serge Mensah |
+| Histoire-Géographie | KPOSSOU Rachelle Ahui |
+| EPS | VIEYRA Blaise Ahonon |
+| Français | DJENONTIN Grâce Nonvide |
+| Philosophie | AGOSSOU Félicien Djifa |
+
+### 1ere D1
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | AGBANGLA Raoul Sènou |
+| Anglais | GBAGUIDI Estelle Nayo |
+| PCT | AKPLOGAN Nestor Comlan |
+| SVT | ASSOGBA Martine Yawa |
+| Histoire-Géographie | HOUNYONOU Abel Coffi |
+| EPS | VIEYRA Blaise Ahonon |
+| Français | DJENONTIN Grâce Nonvide |
+| Philosophie | FASSINOU Rosine Nansi |
+
+### 1ere D2
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | AGBANGLA Raoul Sènou |
+| Anglais | TOSSOU Parfait Djidjo |
+| PCT | AKPLOGAN Nestor Comlan |
+| SVT | ASSOGBA Martine Yawa |
+| Histoire-Géographie | KPOSSOU Rachelle Ahui |
+| EPS | VIEYRA Blaise Ahonon |
+| Français | DJENONTIN Grâce Nonvide |
+| Philosophie | FASSINOU Rosine Nansi |
+
+### Terminale C
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | TOKPO Bienvenu Codjo |
+| Anglais | TOSSOU Parfait Djidjo |
+| PCT | AKPLOGAN Nestor Comlan |
+| SVT | ASSOGBA Martine Yawa |
+| Histoire-Géographie | KPOSSOU Rachelle Ahui |
+| EPS | VIEYRA Blaise Ahonon |
+| Français | HOUÉTO Clément Togbé |
+| Philosophie | FASSINOU Rosine Nansi |
+
+### Terminale D1
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | TOKPO Bienvenu Codjo |
+| Anglais | TOSSOU Parfait Djidjo |
+| PCT | AKPLOGAN Nestor Comlan |
+| SVT | ASSOGBA Martine Yawa |
+| Histoire-Géographie | KPOSSOU Rachelle Ahui |
+| EPS | VIEYRA Blaise Ahonon |
+| Français | HOUÉTO Clément Togbé |
+| Philosophie | FASSINOU Rosine Nansi |
+
+### Terminale D2
+| Subject | Teacher |
+|---------|---------|
+| Mathématiques | TOKPO Bienvenu Codjo |
+| Anglais | TOSSOU Parfait Djidjo |
+| PCT | AKPLOGAN Nestor Comlan |
+| SVT | ASSOGBA Martine Yawa |
+| Histoire-Géographie | KPOSSOU Rachelle Ahui |
+| EPS | VIEYRA Blaise Ahonon |
+| Français | HOUÉTO Clément Togbé |
+| Philosophie | FASSINOU Rosine Nansi |
 
 ---
 
@@ -169,7 +420,10 @@ FASSINOU Rosine Nansi        | 97120002 | fassinou.rosine@test.bj
 ---
 
 ## Notes
-- Allemand/Espagnol split: 4ème A + 3ème A → Allemand, 4ème B + 3ème B → Espagnol. In grade entry, the other language shows "—" (not applicable).
+- **20 classes** total. 5ème has 3 groups (A, B, C); 2nde and 1ère are split into séries C/D (2 groups each); Terminale C is a single group, Terminale D has 2.
+- Allemand/Espagnol split: 4eme A + 3eme A → Allemand, 4eme B + 3eme B → Espagnol. In grade entry, the other language shows "—" (not applicable).
+- Lower levels (6è-5è) keep the same teacher set across all their groups (incl. 5eme C).
+- All four 2nde classes share the same teachers; all three Terminale classes share the same teachers.
 - Teacher #5 (TOKPO) and #30 (MONTCHO) have lighter loads — realistic for part-time or shared teachers.
-- All phone numbers are 8-digit Beninese format (97XXXXXX).
-- All emails use @test.bj — not real addresses.
+- All phone numbers are 8-digit Beninese format (97XXXXXX). All emails use @test.bj — not real addresses.
+- If your 2nde/1ère/Tle séries (C vs D) have **different subject lists** than shown, adjust the per-class subject rows to match what you configured in onboarding.
