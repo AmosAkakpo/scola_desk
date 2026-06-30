@@ -88,12 +88,12 @@ router.get('/:id', requirePermission('students.view'), (req, res) => {
 // ─── PUT /api/teachers/:id — Update info ────────────────────
 router.put('/:id', requirePermission('students.edit'), (req, res) => {
   const db = getDb()
-  const { full_name, phone, email, qualification } = req.body
+  const { full_name, phone, email, qualification, hourly_rate } = req.body
   const teacher = db.prepare('SELECT id FROM teachers WHERE id = ? AND is_deleted = 0').get(req.params.id)
   if (!teacher) return res.status(404).json({ error: 'NOT_FOUND' })
 
-  db.prepare('UPDATE teachers SET full_name = ?, phone = ?, email = ?, qualification = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .run(full_name?.trim(), phone || null, email || null, qualification || null, req.params.id)
+  db.prepare('UPDATE teachers SET full_name = ?, phone = ?, email = ?, qualification = ?, hourly_rate = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(full_name?.trim(), phone || null, email || null, qualification || null, hourly_rate != null ? parseFloat(hourly_rate) : 0, req.params.id)
 
   return res.json({ success: true })
 })

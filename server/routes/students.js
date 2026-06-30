@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const { getDb } = require('../db/init')
 const { generateUUID, generateStudentUID, getSchoolPrefix } = require('../utils/uid')
+const { autoAssignMandatoryFees } = require('../utils/fees')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
 
@@ -134,6 +135,8 @@ router.post('/', requirePermission('students.edit'), (req, res) => {
     INSERT INTO enrollments (enrollment_uid, student_id, classroom_id, academic_year_id)
     VALUES (?, ?, ?, ?)
   `).run(generateUUID(), studentId, classroom_id, parseInt(yearId))
+
+  autoAssignMandatoryFees(db, studentId, parseInt(yearId))
 
   db.prepare(`
     INSERT INTO audit_logs (user_id, action, entity_type, entity_id)

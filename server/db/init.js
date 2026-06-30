@@ -82,6 +82,10 @@ function runMigrations() {
         {
             version: '008_timetable',
             run: require('./migration/008_timetable').migration008
+        },
+        {
+            version: '009_finance_module',
+            run: require('./migration/009_finance_module').migration009
         }
     ]
 

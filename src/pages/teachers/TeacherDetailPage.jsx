@@ -67,7 +67,7 @@ export default function TeacherDetailPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xs font-semibold text-steel-400 uppercase tracking-wide">Informations</h2>
           {!editing ? (
-            <button onClick={() => { setEditing(true); setEditForm({ full_name: teacher.full_name, phone: teacher.phone || '', email: teacher.email || '', qualification: teacher.qualification || '' }) }}
+            <button onClick={() => { setEditing(true); setEditForm({ full_name: teacher.full_name, phone: teacher.phone || '', email: teacher.email || '', qualification: teacher.qualification || '', hourly_rate: teacher.hourly_rate || '' }) }}
               className="text-xs text-brand hover:text-brand-600 font-medium">Modifier</button>
           ) : (
             <div className="flex gap-2">
@@ -84,6 +84,7 @@ export default function TeacherDetailPage() {
             <div><p className="text-steel-400 text-xs">Sexe</p><p className="text-steel-800">{teacher.gender === 'M' ? 'Masculin' : teacher.gender === 'F' ? 'Féminin' : '—'}</p></div>
             <div><p className="text-steel-400 text-xs">Qualification</p><p className="text-steel-800">{teacher.qualification || '—'}</p></div>
             <div><p className="text-steel-400 text-xs">Matière de spécialité</p><p className="text-steel-800">{teacher.specialty_name || '—'}</p></div>
+            <div><p className="text-steel-400 text-xs">Taux horaire</p><p className="text-steel-800">{teacher.hourly_rate ? new Intl.NumberFormat('fr-FR').format(teacher.hourly_rate) + ' F/h' : '—'}</p></div>
           </div>
         ) : (
           <form onSubmit={saveEdit} className="grid grid-cols-3 gap-3">
@@ -102,10 +103,16 @@ export default function TeacherDetailPage() {
               <input type="email" value={editForm.email || ''} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
                 className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
             </div>
-            <div className="col-span-3">
+            <div className="col-span-2">
               <label className="block text-xs text-steel-500 mb-1">Qualification</label>
               <input type="text" value={editForm.qualification || ''} onChange={e => setEditForm(p => ({ ...p, qualification: e.target.value }))}
                 placeholder="Ex: CAPES, Licence en Mathématiques..."
+                className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
+            </div>
+            <div>
+              <label className="block text-xs text-steel-500 mb-1">Taux horaire (XOF)</label>
+              <input type="number" min="0" value={editForm.hourly_rate || ''} onChange={e => setEditForm(p => ({ ...p, hourly_rate: e.target.value }))}
+                placeholder="Ex: 3000"
                 className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
             </div>
           </form>

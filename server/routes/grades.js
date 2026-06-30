@@ -287,7 +287,7 @@ router.get('/:classroomId/:subjectId/:semester', requirePermission('grades.view'
     total_count: rows.length,
   }
 
-  return res.json({ templates, rows, class_stats: classStats, coefficient })
+  return res.json({ templates, rows, class_stats: classStats, coefficient, appreciation_scale: scale })
 })
 
 // ─── POST /api/grades/batch — Save scores ───────────────────
@@ -303,17 +303,35 @@ router.post('/batch', requirePermission('grades.edit'), (req, res) => {
       score = excluded.score, is_absent = excluded.is_absent,
       entered_by = excluded.entered_by, entered_at = datetime('now'), is_deleted = 0
   `)
+  const getMaxScore = db.prepare('SELECT max_score FROM assessment_templates WHERE id = ?')
 
   let saved = 0
+  const errors = []
   db.transaction(() => {
     for (const s of scores) {
       if (!s.template_id || !s.student_id) continue
-      upsert.run(s.template_id, s.student_id, s.score ?? null, s.is_absent ? 1 : 0, req.user.id)
+      if (s.is_absent) {
+        upsert.run(s.template_id, s.student_id, null, 1, req.user.id)
+        saved++
+        continue
+      }
+      if (s.score !== null && s.score !== undefined) {
+        const tpl = getMaxScore.get(s.template_id)
+        if (!tpl) continue
+        const num = parseFloat(s.score)
+        if (isNaN(num) || num < 0 || num > tpl.max_score) {
+          errors.push({ template_id: s.template_id, student_id: s.student_id, reason: `score ${s.score} hors barème (0-${tpl.max_score})` })
+          continue
+        }
+        upsert.run(s.template_id, s.student_id, num, 0, req.user.id)
+      } else {
+        upsert.run(s.template_id, s.student_id, null, 0, req.user.id)
+      }
       saved++
     }
   })()
 
-  return res.json({ success: true, saved })
+  return res.json({ success: true, saved, errors })
 })
 
 // ─── GET /api/grades/sheet-options — Classes + semesters for bulk download ─
@@ -485,21 +503,41 @@ router.post('/compute/:classroomId/:semester', requirePermission('grades.edit'),
 
   const classSize = students.length
 
-  // Compute subject averages per student
+  // Bulk-fetch all templates for this classroom+semester (1 query instead of N×S)
+  const allTemplates = db.prepare(`
+    SELECT id, subject_id, assessment_type, max_score, weight FROM assessment_templates
+    WHERE classroom_id = ? AND academic_year_id = ? AND semester = ?
+  `).all(classroomId, yearId, semester)
+
+  const templatesBySubject = {}
+  for (const t of allTemplates) {
+    if (!templatesBySubject[t.subject_id]) templatesBySubject[t.subject_id] = []
+    templatesBySubject[t.subject_id].push(t)
+  }
+
+  // Bulk-fetch all scores for these templates (1 query instead of N×S×T)
+  const allScores = allTemplates.length > 0
+    ? db.prepare(`
+        SELECT template_id, student_id, score, is_absent FROM assessment_scores
+        WHERE template_id IN (${allTemplates.map(() => '?').join(',')}) AND is_deleted = 0
+      `).all(...allTemplates.map(t => t.id))
+    : []
+
+  const scoreMap = {}
+  for (const s of allScores) { scoreMap[`${s.template_id}_${s.student_id}`] = s }
+
+  // Compute subject averages per student — all in memory, no more queries
   const studentResults = students.map(student => {
     let totalWeightedPoints = 0
     let totalCoefficients = 0
     const subjectAvgs = []
 
     for (const ls of levelSubjects) {
-      const templates = db.prepare(`
-        SELECT id, assessment_type, max_score, weight FROM assessment_templates
-        WHERE classroom_id = ? AND subject_id = ? AND academic_year_id = ? AND semester = ?
-      `).all(classroomId, ls.subject_id, yearId, semester)
+      const templates = templatesBySubject[ls.subject_id] || []
 
       const byType = {}
       for (const t of templates) {
-        const score = db.prepare('SELECT score, is_absent FROM assessment_scores WHERE template_id = ? AND student_id = ? AND is_deleted = 0').get(t.id, student.student_id)
+        const score = scoreMap[`${t.id}_${student.student_id}`]
         if (!byType[t.assessment_type]) byType[t.assessment_type] = { total: 0, count: 0, weight: t.weight, max: t.max_score }
         if (score && score.score !== null && score.is_absent !== 1) {
           byType[t.assessment_type].total += score.score

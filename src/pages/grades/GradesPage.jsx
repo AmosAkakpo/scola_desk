@@ -3,6 +3,80 @@ import api from '../../utils/api'
 
 const TYPE_LABELS = { interrogation: 'Interro', devoir: 'Devoir', composition: 'Compo', tp: 'TP', oral: 'Oral' }
 
+function recomputeRows(rows, templates, coefficient, appreciationScale) {
+  const typeGroups = {}
+  templates.forEach(t => {
+    if (!typeGroups[t.assessment_type]) typeGroups[t.assessment_type] = { weight: t.weight, max: t.max_score }
+  })
+
+  const computed = rows.map(row => {
+    let totalGraded = 0
+    const byType = {}
+
+    templates.forEach(t => {
+      const s = row.scores[t.id] || {}
+      if (s.score !== null || s.is_absent) totalGraded++
+      if (!byType[t.assessment_type]) byType[t.assessment_type] = { total: 0, count: 0, weight: t.weight, max: t.max_score }
+      if (s.score !== null && !s.is_absent) {
+        byType[t.assessment_type].total += s.score
+        byType[t.assessment_type].count++
+      }
+    })
+
+    const typeAverages = {}
+    let weightedSum = 0, weightTotal = 0
+    for (const [type, data] of Object.entries(byType)) {
+      if (data.count > 0) {
+        const avg = (data.total / data.count) * (data.max === 20 ? 1 : 20 / data.max)
+        typeAverages[type] = parseFloat(avg.toFixed(2))
+        weightedSum += avg * data.weight
+        weightTotal += data.weight
+      } else {
+        typeAverages[type] = null
+      }
+    }
+
+    const average = weightTotal > 0 ? parseFloat((weightedSum / weightTotal).toFixed(2)) : null
+    const moyCoef = average !== null ? parseFloat((average * coefficient).toFixed(2)) : null
+
+    let appreciation = ''
+    if (average !== null && appreciationScale) {
+      for (const s of appreciationScale) {
+        if (average >= s.min && average <= s.max) { appreciation = s.label; break }
+      }
+    }
+
+    return { ...row, type_averages: typeAverages, average, moy_coef: moyCoef, appreciation, graded: totalGraded, total_assessments: templates.length }
+  })
+
+  const sorted = [...computed].filter(r => r.average !== null).sort((a, b) => b.average - a.average)
+  let rank = 1
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i].average < sorted[i - 1].average) rank = i + 1
+    sorted[i]._rank = rank
+    sorted[i]._rankSuffix = (i > 0 && sorted[i].average === sorted[i - 1].average) ? 'ex' : ''
+  }
+  const rankMap = {}
+  sorted.forEach(r => { rankMap[r.student_id] = { rank: r._rank, suffix: r._rankSuffix } })
+
+  computed.forEach(r => {
+    const rk = rankMap[r.student_id]
+    r.rank = rk?.rank || null
+    r.rank_suffix = rk?.suffix || ''
+  })
+
+  const validAverages = computed.filter(r => r.average !== null).map(r => r.average)
+  const classStats = {
+    class_average: validAverages.length > 0 ? parseFloat((validAverages.reduce((a, b) => a + b, 0) / validAverages.length).toFixed(2)) : null,
+    highest: validAverages.length > 0 ? Math.max(...validAverages) : null,
+    lowest: validAverages.length > 0 ? Math.min(...validAverages) : null,
+    graded_count: computed.filter(r => r.graded > 0).length,
+    total_count: computed.length,
+  }
+
+  return { rows: computed, classStats }
+}
+
 export default function GradesPage() {
   const [classrooms, setClassrooms] = useState([])
   const [subjects, setSubjects] = useState([])
@@ -14,11 +88,12 @@ export default function GradesPage() {
   const [rows, setRows] = useState([])
   const [classStats, setClassStats] = useState(null)
   const [coefficient, setCoefficient] = useState(1)
+  const [appreciationScale, setAppreciationScale] = useState([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const debounceRef = useRef(null)
   const pendingRef = useRef([])
 
-  // Load selectors
   useEffect(() => {
     api.get('/api/grades/selectors').then(res => {
       setClassrooms(res.data.classrooms || [])
@@ -26,7 +101,6 @@ export default function GradesPage() {
     })
   }, [])
 
-  // Load subjects when classroom changes
   useEffect(() => {
     if (!classroomId) { setSubjects([]); return }
     api.get(`/api/grades/subjects/${classroomId}`).then(res => {
@@ -35,52 +109,53 @@ export default function GradesPage() {
     })
   }, [classroomId])
 
-  // Load grades when all three selected
   const loadGrades = useCallback(async () => {
     if (!classroomId || !subjectId || !semester) return
     setLoading(true)
     const res = await api.get(`/api/grades/${classroomId}/${subjectId}/${semester}`)
-    setTemplates(res.data.templates || [])
-    setRows(res.data.rows || [])
-    setClassStats(res.data.class_stats || null)
-    setCoefficient(res.data.coefficient || 1)
+    const tpls = res.data.templates || []
+    const coef = res.data.coefficient || 1
+    const scale = res.data.appreciation_scale || []
+    setTemplates(tpls)
+    setCoefficient(coef)
+    setAppreciationScale(scale)
+    const { rows: computed, classStats: stats } = recomputeRows(res.data.rows || [], tpls, coef, scale)
+    setRows(computed)
+    setClassStats(stats)
     setLoading(false)
   }, [classroomId, subjectId, semester])
 
   useEffect(() => { loadGrades() }, [loadGrades])
 
-  // Save score on blur
-  async function saveScore(templateId, studentId, score, isAbsent) {
-    pendingRef.current.push({ template_id: templateId, student_id: studentId, score, is_absent: isAbsent })
+  function handleScoreChange(studentId, templateId, value, isAbsent) {
+    setRows(prev => {
+      const updated = prev.map(r => {
+        if (r.student_id !== studentId) return r
+        const newScores = { ...r.scores }
+        newScores[templateId] = { ...newScores[templateId], score: value, is_absent: isAbsent }
+        return { ...r, scores: newScores }
+      })
+      const { rows: recomputed, classStats: stats } = recomputeRows(updated, templates, coefficient, appreciationScale)
+      setClassStats(stats)
+      return recomputed
+    })
 
-    // Debounce: save all pending after 300ms of no new entries
-    clearTimeout(pendingRef.current.timer)
-    pendingRef.current.timer = setTimeout(async () => {
-      const batch = [...pendingRef.current.filter(p => p.template_id)]
+    pendingRef.current.push({ template_id: templateId, student_id: studentId, score: value, is_absent: isAbsent })
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      const batch = pendingRef.current.filter(p => p.template_id)
       pendingRef.current = []
       if (batch.length === 0) return
       setSaving(true)
-      await api.post('/api/grades/batch', { scores: batch })
+      try { await api.post('/api/grades/batch', { scores: batch }) } catch {}
       setSaving(false)
-      loadGrades()
-    }, 300)
+    }, 400)
   }
 
-  function updateLocalScore(studentId, templateId, value, isAbsent) {
-    setRows(prev => prev.map(r => {
-      if (r.student_id !== studentId) return r
-      const newScores = { ...r.scores }
-      newScores[templateId] = { ...newScores[templateId], score: value, is_absent: isAbsent }
-      return { ...r, scores: newScores }
-    }))
-  }
-
-  // Group templates by type for column headers
-  const grouped = []
-  templates.forEach(t => {
-    const label = `${TYPE_LABELS[t.assessment_type] || t.assessment_type} ${t.sequence_number}`
-    grouped.push({ ...t, label })
-  })
+  const grouped = templates.map(t => ({
+    ...t,
+    label: `${TYPE_LABELS[t.assessment_type] || t.assessment_type} ${t.sequence_number}`,
+  }))
 
   const typeGroups = {}
   templates.forEach(t => {
@@ -193,10 +268,7 @@ export default function GradesPage() {
                           value={s.score}
                           isAbsent={s.is_absent}
                           maxScore={t.max_score}
-                          onChange={(val, absent) => {
-                            updateLocalScore(row.student_id, t.id, val, absent)
-                            saveScore(t.id, row.student_id, val, absent)
-                          }}
+                          onChange={(val, absent) => handleScoreChange(row.student_id, t.id, val, absent)}
                         />
                       </td>
                     )
@@ -214,7 +286,7 @@ export default function GradesPage() {
                     {row.moy_coef?.toFixed(2) ?? '—'}
                   </td>
                   <td className="px-2 py-1.5 text-center bg-steel-50/50 font-semibold text-brand">
-                    {row.rank ? `${row.rank}${row.rank_suffix ? ' ex' : ''}` : '—'}
+                    {row.rank ? `${row.rank}${row.rank_suffix ? ' ex.' : ''}` : '—'}
                   </td>
                   <td className="px-2 py-1.5 bg-steel-50/50 text-steel-600">{row.appreciation || '—'}</td>
                 </tr>

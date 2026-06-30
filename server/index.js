@@ -35,6 +35,8 @@ app.use('/api/grades', require('./routes/grades'))
 app.use('/api/timetable', require('./routes/timetable'))
 app.use('/api/decisions', require('./routes/decisions'))
 app.use('/api/report-cards', require('./routes/reportcards'))
+app.use('/api/finance', require('./routes/finance'))
+app.use('/api/attendance', require('./routes/attendance'))
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER] ScolaDesk running on port ${PORT}`)

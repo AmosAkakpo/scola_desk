@@ -14,11 +14,16 @@ import ClassroomsPage from './pages/classrooms/ClassroomsPage'
 import ClassroomDetailPage from './pages/classrooms/ClassroomDetailPage'
 import GradesPage from './pages/grades/GradesPage'
 import GradesComputePage from './pages/grades/GradesComputePage'
-import FicheNotePage from './pages/grades/FicheNotePage'
-import ImportFichePage from './pages/grades/ImportFichePage'
 import TimetablePage from './pages/timetable/TimetablePage'
 import ReportCardsPage from './pages/reports/ReportCardsPage'
 import ReportCardViewPage from './pages/reports/ReportCardViewPage'
+import FinanceDashboardPage from './pages/finance/FinanceDashboardPage'
+import TuitionPage from './pages/finance/TuitionPage'
+import StudentReceiptPage from './pages/finance/StudentReceiptPage'
+import SalariesPage from './pages/finance/SalariesPage'
+import ExpensesPage from './pages/finance/ExpensesPage'
+import FinanceSettingsPage from './pages/finance/FinanceSettingsPage'
+import SubscriptionPage from './pages/finance/SubscriptionPage'
 import SettingsPage from './pages/settings/SettingsPage'
 import api from './utils/api'
 import './App.css'
@@ -108,11 +113,16 @@ function ProtectedApp({ schoolInfo }) {
           <Route path="/classrooms/:id" element={<ClassroomDetailPage />} />
           <Route path="/grades" element={<GradesPage />} />
           <Route path="/grades/compute" element={<GradesComputePage />} />
-          <Route path="/grades/fiches" element={<FicheNotePage />} />
-          <Route path="/grades/import" element={<ImportFichePage />} />
           <Route path="/timetable" element={<TimetablePage />} />
           <Route path="/report-cards" element={<ReportCardsPage />} />
           <Route path="/report-cards/:id" element={<ReportCardViewPage />} />
+          <Route path="/finance" element={<FinanceDashboardPage />} />
+          <Route path="/finance/tuition" element={<TuitionPage />} />
+          <Route path="/finance/tuition/:studentId" element={<StudentReceiptPage />} />
+          <Route path="/finance/salaries" element={<SalariesPage />} />
+          <Route path="/finance/expenses" element={<ExpensesPage />} />
+          <Route path="/finance/settings" element={<FinanceSettingsPage />} />
+          <Route path="/finance/subscription" element={<SubscriptionPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>

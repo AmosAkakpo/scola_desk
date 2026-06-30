@@ -4,6 +4,7 @@ const XLSX = require('xlsx')
 const { getDb } = require('../db/init')
 const { hashPassword } = require('../utils/password')
 const { generateUUID, generateShortUID, generateStudentUID, generateTeacherUID, generateUserUID, getSchoolPrefix } = require('../utils/uid')
+const { autoAssignMandatoryFees } = require('../utils/fees')
 
 const TOTAL_STEPS = 13
 
@@ -994,6 +995,7 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
         const result = studentStmt.run(generateStudentUID(prefix), s.matricule, s.full_name, s.birth_date, s.birth_place, s.gender, s.nationality, s.is_redoublant)
         const studentId = result.lastInsertRowid
         enrollStmt.run(generateUUID(), studentId, classroomId, yearId)
+        autoAssignMandatoryFees(db, studentId, yearId)
         if (s.guardian_name) {
           guardianStmt.run(studentId, s.guardian_name, s.guardian_phone, s.guardian_relationship)
         }
@@ -1122,27 +1124,42 @@ router.post('/step11', requireStep(11), (req, res) => {
   }
 })
 
-// ─── GET /api/onboarding/fee-data — Classrooms for fee setup ─
+// ─── GET /api/onboarding/fee-data — Levels for fee setup ────
 router.get('/fee-data', (req, res) => {
   const db = getDb()
-  const license = db.prepare('SELECT license_tier FROM license_state LIMIT 1').get()
+  const license = db.prepare('SELECT license_tier, rate_per_student FROM license_state LIMIT 1').get()
   const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
-  const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
-  const classrooms = db.prepare(`
-    SELECT c.id, c.label, c.level_id, c.expected_tuition, l.name AS level_name FROM classrooms c
-    JOIN levels l ON l.id = c.level_id
-    WHERE c.academic_year_id = ? AND c.is_deleted = 0
-    ORDER BY l.display_order, c.label
+
+  const levels = db.prepare('SELECT id, name, display_order FROM levels WHERE is_active = 1 ORDER BY display_order').all()
+
+  const existingFees = db.prepare(`
+    SELECT ft.*, json_group_array(json_object('level_id', fta.level_id, 'amount', fta.amount)) as amounts_json
+    FROM fee_types ft
+    LEFT JOIN fee_type_amounts fta ON fta.fee_type_id = ft.id
+    WHERE ft.academic_year_id = ?
+    GROUP BY ft.id
+    ORDER BY ft.display_order
   `).all(yearId || 0)
-  const existing = db.prepare('SELECT * FROM fee_structures WHERE academic_year_id = ? AND is_active = 1').all(yearId || 0)
-  return res.json({ is_pro: license?.license_tier === 'PRO', classrooms, existing_fees: existing, periode_count: periodeCount, academic_year_id: yearId })
+
+  for (const f of existingFees) {
+    f.amounts = JSON.parse(f.amounts_json || '[]').filter(a => a.amount != null)
+    delete f.amounts_json
+  }
+
+  return res.json({
+    is_pro: license?.license_tier === 'PRO',
+    rate_per_student: license?.rate_per_student || 0,
+    levels,
+    existing_fees: existingFees,
+    academic_year_id: yearId,
+  })
 })
 
-// ─── POST /api/onboarding/step12 — Fee structures (PRO) ─────
+// ─── POST /api/onboarding/step12 — Fee types (PRO) ──────────
 router.post('/step12', requireStep(12), (req, res) => {
   try {
     const db = getDb()
-    const license = db.prepare('SELECT license_tier FROM license_state LIMIT 1').get()
+    const license = db.prepare('SELECT license_tier, rate_per_student FROM license_state LIMIT 1').get()
 
     if (license?.license_tier !== 'PRO') {
       setCurrentStep(13)
@@ -1152,19 +1169,33 @@ router.post('/step12', requireStep(12), (req, res) => {
     const { fees } = req.body
     const yearId = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value || '0')
 
-    if (fees && Array.isArray(fees) && fees.length > 0) {
-      const stmt = db.prepare(`
-        INSERT OR IGNORE INTO fee_structures (classroom_id, academic_year_id, semester, label, amount, due_date)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      db.transaction(() => {
+    db.transaction(() => {
+      // Always create the system fee (frais de gestion scolaire)
+      const existingSystem = db.prepare('SELECT id FROM fee_types WHERE academic_year_id = ? AND is_system = 1').get(yearId)
+      if (!existingSystem) {
+        db.prepare('INSERT INTO fee_types (academic_year_id, name, is_mandatory, is_system, is_active, display_order) VALUES (?, ?, 1, 1, 1, 99)')
+          .run(yearId, 'Frais de gestion scolaire')
+        const sysId = db.prepare('SELECT last_insert_rowid() as id').get().id
+        db.prepare('INSERT INTO fee_type_amounts (fee_type_id, level_id, amount) VALUES (?, NULL, ?)')
+          .run(sysId, license?.rate_per_student || 0)
+      }
+
+      // Create user-defined fees
+      if (fees && Array.isArray(fees)) {
+        const feeStmt = db.prepare('INSERT OR IGNORE INTO fee_types (academic_year_id, name, is_mandatory, display_order) VALUES (?, ?, ?, ?)')
+        const amtStmt = db.prepare('INSERT OR IGNORE INTO fee_type_amounts (fee_type_id, level_id, amount) VALUES (?, ?, ?)')
+
         for (const f of fees) {
-          if (f.classroom_id && f.label?.trim() && f.amount > 0) {
-            stmt.run(f.classroom_id, yearId, f.semester || null, f.label.trim(), f.amount, f.due_date || null)
+          if (!f.name?.trim() || !f.amounts?.length) continue
+          feeStmt.run(yearId, f.name.trim(), f.is_mandatory ? 1 : 0, f.display_order ?? 0)
+          const ftId = db.prepare('SELECT id FROM fee_types WHERE academic_year_id = ? AND name = ?').get(yearId, f.name.trim())?.id
+          if (!ftId) continue
+          for (const a of f.amounts) {
+            if (a.amount > 0) amtStmt.run(ftId, a.level_id || null, parseFloat(a.amount))
           }
         }
-      })()
-    }
+      }
+    })()
 
     db.prepare(`
       INSERT INTO audit_logs (action, entity_type, entity_id, new_values)

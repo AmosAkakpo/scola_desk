@@ -1463,13 +1463,12 @@ function Step11Assignments({ onNext }) {
   )
 }
 
-// ─── Step 12: Fee Structures (PRO only) ──────────────────────
+// ─── Step 12: Fee Types (PRO only) ───────────────────────────
 function Step12Fees({ onNext }) {
   const [isPro, setIsPro] = useState(false)
-  const [classrooms, setClassrooms] = useState([])
-  const [periodeCount, setPeriodeCount] = useState(3)
+  const [levels, setLevels] = useState([])
+  const [rate, setRate] = useState(0)
   const [fees, setFees] = useState([])
-  const [selectedClass, setSelectedClass] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -1478,10 +1477,16 @@ function Step12Fees({ onNext }) {
   useEffect(() => {
     api.get('/api/onboarding/fee-data').then(res => {
       setIsPro(res.data.is_pro)
-      setClassrooms(res.data.classrooms || [])
-      setPeriodeCount(res.data.periode_count || 3)
-      setFees(res.data.existing_fees || [])
-      if (res.data.classrooms?.length > 0) setSelectedClass(res.data.classrooms[0].id)
+      setLevels(res.data.levels || [])
+      setRate(res.data.rate_per_student || 0)
+      const existing = (res.data.existing_fees || []).filter(f => !f.is_system)
+      if (existing.length > 0) {
+        setFees(existing.map(f => ({
+          name: f.name, is_mandatory: f.is_mandatory,
+          display_order: f.display_order,
+          amounts: (f.amounts || []).reduce((m, a) => { m[a.level_id || 'default'] = a.amount; return m }, {}),
+        })))
+      }
       setLoading(false)
       if (!res.data.is_pro) setAutoSkip(true)
     })
@@ -1492,82 +1497,96 @@ function Step12Fees({ onNext }) {
   }, [autoSkip, onNext])
 
   function addFee() {
-    if (!selectedClass) return
-    setFees(prev => [...prev, { classroom_id: selectedClass, semester: 1, label: '', amount: 0, due_date: '' }])
+    setFees(prev => [...prev, { name: '', is_mandatory: true, display_order: (prev.length + 1) * 10, amounts: {} }])
   }
   function updateFee(i, field, value) { setFees(prev => prev.map((f, idx) => idx === i ? { ...f, [field]: value } : f)) }
+  function updateAmount(i, levelKey, value) {
+    setFees(prev => prev.map((f, idx) => idx === i ? { ...f, amounts: { ...f.amounts, [levelKey]: value } } : f))
+  }
   function removeFee(i) { setFees(prev => prev.filter((_, idx) => idx !== i)) }
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError(''); setSaving(true)
-    try { await api.post('/api/onboarding/step12', { fees: fees.filter(f => f.label?.trim() && f.amount > 0) }); onNext() }
+    const payload = fees.filter(f => f.name?.trim()).map(f => ({
+      name: f.name.trim(), is_mandatory: f.is_mandatory, display_order: f.display_order || 0,
+      amounts: Object.entries(f.amounts).filter(([, v]) => v > 0).map(([k, v]) => ({
+        level_id: k === 'default' ? null : parseInt(k), amount: parseFloat(v),
+      })),
+    }))
+    try { await api.post('/api/onboarding/step12', { fees: payload }); onNext() }
     catch (err) { setError(err.response?.data?.message || 'Erreur'); setSaving(false) }
   }
 
   if (loading || autoSkip) return <div className="text-center py-8"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin mx-auto" /></div>
 
-  const classFees = fees.filter(f => f.classroom_id === selectedClass)
-
   return (
     <div className="max-w-2xl mx-auto">
       <h2 className="text-lg font-medium text-steel-900 mb-1">Frais de scolarité</h2>
-      <p className="text-sm text-steel-500 mb-2">Définissez les frais par classe et par trimestre (licence PRO).</p>
-      <p className="text-xs text-steel-400 italic mb-6">NB : vous pouvez presser continuer pour passer cette étape.</p>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="flex gap-2 flex-wrap">
-          {classrooms.map(c => (
-            <button key={c.id} type="button" onClick={() => setSelectedClass(c.id)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${selectedClass === c.id ? 'bg-brand text-white' : 'bg-white border border-steel-200 text-steel-600 hover:bg-steel-50'}`}>
-              {c.label} <span className="ml-1 opacity-70">({fees.filter(f => f.classroom_id === c.id).length})</span>
-            </button>
-          ))}
-        </div>
+      <p className="text-sm text-steel-500 mb-2">Définissez les frais par niveau. Les montants peuvent varier selon le niveau.</p>
+      <p className="text-xs text-steel-400 italic mb-6">NB : vous pouvez passer cette étape et configurer les frais plus tard dans les paramètres financiers.</p>
 
-        {selectedClass && (
-          <div className="bg-white rounded-xl border border-steel-200 p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium text-steel-700">{classrooms.find(c => c.id === selectedClass)?.label}</p>
-              <p className="text-xs text-steel-400">Scolarité prévue: {(classrooms.find(c => c.id === selectedClass)?.expected_tuition || 0).toLocaleString('fr-FR')} XOF</p>
-            </div>
-            {classFees.map((f, i) => {
-              const globalIdx = fees.indexOf(f)
-              return (
-                <div key={globalIdx} className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-2">
-                    <label className="block text-xs text-steel-500 mb-1">Trimestre</label>
-                    <select value={f.semester || 1} onChange={e => updateFee(globalIdx, 'semester', parseInt(e.target.value))}
-                      className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand bg-white">
-                      {Array.from({ length: periodeCount }, (_, k) => k + 1).map(n => <option key={n} value={n}>T{n}</option>)}
-                    </select>
-                  </div>
-                  <div className="col-span-4">
-                    <label className="block text-xs text-steel-500 mb-1">Libellé</label>
-                    <input type="text" value={f.label || ''} onChange={e => updateFee(globalIdx, 'label', e.target.value)} placeholder="Scolarité T1"
-                      className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
-                  </div>
-                  <div className="col-span-3">
-                    <label className="block text-xs text-steel-500 mb-1">Montant (XOF)</label>
-                    <input type="number" value={f.amount || ''} onChange={e => updateFee(globalIdx, 'amount', parseInt(e.target.value) || 0)}
-                      className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="block text-xs text-steel-500 mb-1">Échéance</label>
-                    <input type="date" value={f.due_date || ''} onChange={e => updateFee(globalIdx, 'due_date', e.target.value)}
-                      className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
-                  </div>
-                  <div className="col-span-1">
-                    <button type="button" onClick={() => removeFee(globalIdx)} className="text-red-400 hover:text-red-500 text-xs py-1.5">✕</button>
-                  </div>
+      {rate > 0 && (
+        <div className="bg-blue-50 rounded-lg border border-blue-200 p-3 mb-4">
+          <p className="text-xs text-blue-700">
+            Le frais de gestion scolaire ({new Intl.NumberFormat('fr-FR').format(rate)} F / élève) sera ajouté automatiquement.
+          </p>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {fees.map((f, i) => (
+          <div key={i} className="bg-white rounded-xl border border-steel-200 p-5 space-y-3">
+            <div className="flex items-start justify-between">
+              <div className="flex-1 grid grid-cols-12 gap-3">
+                <div className="col-span-5">
+                  <label className="block text-xs text-steel-500 mb-1">Nom du frais</label>
+                  <input type="text" value={f.name || ''} onChange={e => updateFee(i, 'name', e.target.value)}
+                    placeholder="Ex: Scolarité, Inscription..." className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
                 </div>
-              )
-            })}
-            <button type="button" onClick={addFee}
-              className="w-full py-2 border border-dashed border-steel-300 rounded-lg text-xs text-steel-500 hover:border-brand hover:text-brand transition-colors">
-              + Ajouter une ligne de frais
-            </button>
+                <div className="col-span-3">
+                  <label className="block text-xs text-steel-500 mb-1">Type</label>
+                  <select value={f.is_mandatory ? '1' : '0'} onChange={e => updateFee(i, 'is_mandatory', e.target.value === '1')}
+                    className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand">
+                    <option value="1">Obligatoire</option>
+                    <option value="0">Optionnel</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs text-steel-500 mb-1">Ordre</label>
+                  <input type="number" min="0" value={f.display_order || ''} onChange={e => updateFee(i, 'display_order', parseInt(e.target.value) || 0)}
+                    className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
+                </div>
+                <div className="col-span-2 flex items-end">
+                  <button type="button" onClick={() => removeFee(i)} className="text-red-400 hover:text-red-500 text-sm py-1.5 px-2">✕ Supprimer</button>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-steel-500 mb-2">Montants par niveau</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-steel-500 w-24">Tous niveaux</span>
+                  <input type="number" min="0" value={f.amounts?.default || ''} onChange={e => updateAmount(i, 'default', parseInt(e.target.value) || 0)}
+                    placeholder="Montant par défaut" className="flex-1 px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+                </div>
+                {levels.map(l => (
+                  <div key={l.id} className="flex items-center gap-2">
+                    <span className="text-xs text-steel-500 w-24 truncate">{l.name}</span>
+                    <input type="number" min="0" value={f.amounts?.[l.id] || ''} onChange={e => updateAmount(i, l.id, parseInt(e.target.value) || 0)}
+                      placeholder="—" className="flex-1 px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        )}
+        ))}
+
+        <button type="button" onClick={addFee}
+          className="w-full py-2.5 border border-dashed border-steel-300 rounded-lg text-sm text-steel-500 hover:border-brand hover:text-brand transition-colors">
+          + Ajouter un type de frais
+        </button>
 
         {error && <p className="text-red-500 text-sm">{error}</p>}
         <div className="flex justify-end pt-2">

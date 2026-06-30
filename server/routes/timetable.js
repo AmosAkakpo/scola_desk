@@ -158,6 +158,46 @@ router.post('/entry', requirePermission('students.edit'), (req, res) => {
   return res.status(201).json({ success: true, id: result.lastInsertRowid })
 })
 
+// ─── PUT /api/timetable/entry/:id — move / resize (same conflict rules) ─
+router.put('/entry/:id', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  const yr = yearId(db)
+  const entry = db.prepare('SELECT * FROM timetable_entries WHERE id = ?').get(req.params.id)
+  if (!entry) return res.status(404).json({ error: 'NOT_FOUND' })
+
+  const day_of_week = req.body.day_of_week ?? entry.day_of_week
+  const start_time = req.body.start_time ?? entry.start_time
+  const end_time = req.body.end_time ?? entry.end_time
+  if (!validTime(start_time) || !validTime(end_time)) return res.status(400).json({ error: 'BAD_TIME', message: 'Horaires invalides' })
+  if (start_time >= end_time) return res.status(400).json({ error: 'BAD_RANGE', message: 'L\'heure de fin doit suivre l\'heure de début' })
+
+  // Class conflict (ignore self)
+  const classDay = db.prepare('SELECT start_time, end_time FROM timetable_entries WHERE classroom_id = ? AND academic_year_id = ? AND day_of_week = ? AND id != ?')
+    .all(entry.classroom_id, yr, day_of_week, entry.id)
+  for (const e of classDay) {
+    if (overlaps(start_time, end_time, e.start_time, e.end_time)) {
+      return res.status(409).json({ error: 'CLASS_BUSY', message: `Créneau déjà occupé (${e.start_time}–${e.end_time}) pour cette classe` })
+    }
+  }
+  // Teacher conflict (ignore self)
+  if (entry.teacher_id) {
+    const tDay = db.prepare(`
+      SELECT e.start_time, e.end_time, c.label FROM timetable_entries e JOIN classrooms c ON c.id = e.classroom_id
+      WHERE e.teacher_id = ? AND e.academic_year_id = ? AND e.day_of_week = ? AND e.id != ?
+    `).all(entry.teacher_id, yr, day_of_week, entry.id)
+    for (const e of tDay) {
+      if (overlaps(start_time, end_time, e.start_time, e.end_time)) {
+        const tName = db.prepare('SELECT full_name FROM teachers WHERE id = ?').get(entry.teacher_id)?.full_name || 'L\'enseignant'
+        return res.status(409).json({ error: 'TEACHER_BUSY', message: `${tName} est déjà en cours en ${e.label} (${e.start_time}–${e.end_time})` })
+      }
+    }
+  }
+
+  db.prepare('UPDATE timetable_entries SET day_of_week = ?, start_time = ?, end_time = ? WHERE id = ?')
+    .run(day_of_week, start_time, end_time, entry.id)
+  return res.json({ success: true })
+})
+
 // ─── DELETE /api/timetable/entry/:id ────────────────────────
 router.delete('/entry/:id', requirePermission('students.edit'), (req, res) => {
   const db = getDb()
