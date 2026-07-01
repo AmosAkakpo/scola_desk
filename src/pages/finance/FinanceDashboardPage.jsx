@@ -20,17 +20,21 @@ function KPI({ label, value, color, sub }) {
 export default function FinanceDashboardPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const navigate = useNavigate()
 
   useEffect(() => {
     api.get('/api/finance/dashboard').then(res => {
       setData(res.data)
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(err => {
+      setError(err.response?.data?.message || err.message || 'Erreur inconnue')
+      setLoading(false)
+    })
   }, [])
 
   if (loading) return <div className="flex justify-center py-16"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin" /></div>
-  if (!data) return <p className="text-steel-400 text-sm text-center py-12">Erreur de chargement</p>
+  if (!data) return <p className="text-red-500 text-sm text-center py-12">Erreur de chargement{error ? ` — ${error}` : ''}</p>
 
   const collectionPct = data.total_due > 0 ? Math.round((data.total_collected / data.total_due) * 100) : 0
 

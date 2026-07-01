@@ -65,6 +65,8 @@ function Step1Confirm({ school, license, features, size, semesters, onNext }) {
 
 // ─── Account Fields (extracted to avoid re-render focus loss) ─
 function AccountFields({ label, value, onChange, required, onRemove }) {
+  const [showPassword, setShowPassword] = useState(false)
+
   return (
     <div className="bg-white rounded-xl border border-steel-200 p-5 space-y-3 relative">
       <h3 className="text-sm font-medium text-steel-700">{label} {required && <span className="text-red-500">*</span>}</h3>
@@ -83,8 +85,24 @@ function AccountFields({ label, value, onChange, required, onRemove }) {
       </div>
       <div>
         <label className="block text-xs text-steel-500 mb-1">Mot de passe <span className="text-red-500">*</span></label>
-        <input type="password" required={required} value={value.password} minLength={6} onChange={e => onChange({ ...value, password: e.target.value })}
-          className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand" placeholder="Minimum 6 caractères" />
+        <div className="relative">
+          <input type={showPassword ? 'text' : 'password'} required={required} value={value.password} minLength={6}
+            onChange={e => onChange({ ...value, password: e.target.value })}
+            className="w-full px-3 py-2 pr-10 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand" placeholder="Minimum 6 caractères" />
+          <button type="button" onClick={() => setShowPassword(p => !p)} tabIndex={-1}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-steel-400 hover:text-steel-600">
+            {showPassword ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -768,13 +786,13 @@ function Step8Classrooms({ onNext }) {
       setSeries(res.data.series || [])
       if (res.data.total_rooms) setTotalRooms(res.data.total_rooms)
       if (res.data.existing_classrooms?.length > 0) {
-        setClassrooms(res.data.existing_classrooms.map(c => ({ label: c.label, level_id: c.level_id, serie_id: c.serie_id, capacity: c.capacity, expected_tuition: c.expected_tuition })))
+        setClassrooms(res.data.existing_classrooms.map(c => ({ id: c.id, label: c.label, level_id: c.level_id, serie_id: c.serie_id, capacity: c.capacity })))
       }
       setLoading(false)
     })
   }, [])
 
-  function addClassroom() { setClassrooms(prev => [...prev, { label: '', level_id: levels[0]?.id || '', serie_id: null, capacity: 50, expected_tuition: 0 }]) }
+  function addClassroom() { setClassrooms(prev => [...prev, { label: '', level_id: levels[0]?.id || '', serie_id: null, capacity: 50 }]) }
   function updateClassroom(i, field, value) { setClassrooms(prev => prev.map((c, idx) => idx === i ? { ...c, [field]: value } : c)) }
   function removeClassroom(i) { setClassrooms(prev => prev.filter((_, idx) => idx !== i)) }
 
@@ -847,11 +865,6 @@ function Step8Classrooms({ onNext }) {
                 <div>
                   <label className="block text-xs text-steel-500 mb-1">Capacité</label>
                   <input type="number" value={c.capacity} onChange={e => updateClassroom(i, 'capacity', parseInt(e.target.value) || 50)}
-                    className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
-                </div>
-                <div>
-                  <label className="block text-xs text-steel-500 mb-1">Scolarité (XOF)</label>
-                  <input type="number" value={c.expected_tuition} onChange={e => updateClassroom(i, 'expected_tuition', parseInt(e.target.value) || 0)}
                     className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
                 </div>
               </div>
@@ -1030,7 +1043,6 @@ function Step9Teachers({ onNext }) {
           <div className="space-y-2">
             {[
               { value: 'custom', label: 'Auto-généré', desc: 'SCH/2026/0001, SCH/2026/0002...' },
-              { value: 'educmaster', label: 'Educmaster', desc: 'Matricule national requis par élève' },
               { value: 'manual', label: 'Manuel (optionnel)', desc: 'L\'école fournit ses propres numéros' },
             ].map(opt => (
               <label key={opt.value} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${mode === opt.value ? 'border-brand bg-brand-50' : 'border-steel-200 hover:border-steel-300'}`}>
@@ -1043,6 +1055,9 @@ function Step9Teachers({ onNext }) {
               </label>
             ))}
           </div>
+          <p className="text-xs text-steel-400 mt-3">
+            Le numéro Educmaster est optionnel et indépendant de ce choix — une colonne dédiée est toujours disponible dans le modèle Excel d'import des élèves, et modifiable plus tard sur la fiche de chaque élève.
+          </p>
         </div>
 
         {/* Upload section */}

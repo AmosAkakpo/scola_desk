@@ -3,17 +3,38 @@ import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import api from '../utils/api.js'
 
-const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Tableau de bord', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6', perm: null },
-  { to: '/students', label: 'Élèves', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z', perm: 'students.view' },
-  { to: '/teachers', label: 'Enseignants', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z', perm: 'students.view' },
-  { to: '/classrooms', label: 'Classes', icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4', perm: 'students.view' },
-  { to: '/timetable', label: 'Emploi du temps', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', perm: 'students.view' },
-  { to: '/grades', label: 'Notes', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4', perm: 'grades.view' },
-  { to: '/report-cards', label: 'Bulletins', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', perm: 'reports.view' },
-  { to: '/finance', label: 'Finance', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z', perm: 'finance.view' },
-  { to: '/settings', label: 'Paramètres', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z', perm: 'admin' },
+const NAV_GROUPS = [
+  {
+    label: null,
+    items: [
+      { to: '/dashboard', label: 'Tableau de bord', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6', perm: null },
+    ],
+  },
+  {
+    label: 'Gestion académique',
+    items: [
+      { to: '/students', label: 'Élèves', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z', perm: 'students.view' },
+      { to: '/teachers', label: 'Enseignants', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z', perm: 'students.view' },
+      { to: '/classrooms', label: 'Classes', icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4', perm: 'students.view' },
+      { to: '/timetable', label: 'Emploi du temps', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', perm: 'students.view' },
+      { to: '/grades', label: 'Notes', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4', perm: 'grades.view' },
+      { to: '/report-cards', label: 'Bulletins', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z', perm: 'reports.view' },
+    ],
+  },
+  {
+    label: 'Finance',
+    items: [
+      { to: '/finance', label: 'Tableau de bord', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z', perm: 'finance.view', end: true },
+      { to: '/finance/tuition', label: 'Paiements scolarité', icon: 'M3 10h18M7 15h2m2 0h6M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z', perm: 'finance.view' },
+      { to: '/finance/salaries', label: 'Salaires', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z', perm: 'finance.view' },
+      { to: '/finance/expenses', label: 'Dépenses', icon: 'M20 12H4M20 12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4a2 2 0 012-2M20 12V8a2 2 0 00-2-2H6a2 2 0 00-2 2v4', perm: 'finance.view' },
+      { to: '/finance/subscription', label: 'Mon abonnement', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', perm: null },
+      { to: '/finance/settings', label: 'Frais & catégories', icon: 'M9 7h6m0 10v-3m-3 3v-6m-3 6v-9m12 9V7a2 2 0 00-2-2H6a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2z', perm: 'finance.edit' },
+    ],
+  },
 ]
+
+const SETTINGS_ITEM = { to: '/settings', label: 'Paramètres', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z', perm: 'admin' }
 
 function StudentCount({ actual = 0, allowed = 0 }) {
   if (!allowed) return null
@@ -35,11 +56,14 @@ export default function Layout({ schoolInfo }) {
     }).catch(() => {})
   }, [])
 
-  const visibleItems = NAV_ITEMS.filter(item => {
-    if (!item.perm) return true
-    if (item.perm === 'admin') return user?.role === 'admin'
-    return hasPermission(item.perm)
-  })
+  const visibleGroups = NAV_GROUPS.map(group => ({
+    ...group,
+    items: group.items.filter(item => {
+      if (!item.perm) return true
+      if (item.perm === 'admin') return user?.role === 'admin'
+      return hasPermission(item.perm)
+    }),
+  })).filter(group => group.items.length > 0)
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -52,21 +76,39 @@ export default function Layout({ schoolInfo }) {
           </div>
         </div>
 
-        <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-          {visibleItems.map(item => (
-            <NavLink key={item.to} to={item.to} end={item.to === '/dashboard' || item.to === '/grades'}
-              className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
-                isActive ? 'bg-steel-700/50 text-steel-200' : 'text-steel-400 hover:text-steel-200 hover:bg-steel-700/30'
-              }`}>
-              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={item.icon} />
-              </svg>
-              {item.label}
-            </NavLink>
+        <nav className="flex-1 p-2 space-y-3 overflow-y-auto">
+          {visibleGroups.map((group, gi) => (
+            <div key={gi} className="space-y-0.5">
+              {group.label && (
+                <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-steel-500 uppercase tracking-wide">{group.label}</p>
+              )}
+              {group.items.map(item => (
+                <NavLink key={item.to} to={item.to} end={item.end || item.to === '/dashboard' || item.to === '/grades'}
+                  className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                    isActive ? 'bg-steel-700/50 text-steel-200' : 'text-steel-400 hover:text-steel-200 hover:bg-steel-700/30'
+                  }`}>
+                  <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={item.icon} />
+                  </svg>
+                  {item.label}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 
         <div className="p-2 border-t border-steel-700">
+          {user?.role === 'admin' && (
+            <NavLink to={SETTINGS_ITEM.to}
+              className={({ isActive }) => `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                isActive ? 'bg-steel-700/50 text-steel-200' : 'text-steel-400 hover:text-steel-200 hover:bg-steel-700/30'
+              }`}>
+              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={SETTINGS_ITEM.icon} />
+              </svg>
+              {SETTINGS_ITEM.label}
+            </NavLink>
+          )}
           <div className="px-3 py-2 mb-1">
             <p className="text-steel-300 text-xs font-medium truncate">{user?.fullName}</p>
             <p className="text-steel-500 text-[10px]">{user?.roleLabel}</p>

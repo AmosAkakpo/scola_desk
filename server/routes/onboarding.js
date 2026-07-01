@@ -612,16 +612,25 @@ router.post('/step8', requireStep(8), (req, res) => {
     const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
 
     db.transaction(() => {
-      // On re-submit (back-nav), wipe existing classrooms + their templates for a clean slate
-      const oldClassrooms = db.prepare('SELECT id FROM classrooms WHERE academic_year_id = ? AND is_deleted = 0').all(parseInt(yearId))
-      for (const old of oldClassrooms) {
-        db.prepare('DELETE FROM assessment_templates WHERE classroom_id = ?').run(old.id)
-      }
-      db.prepare('DELETE FROM classrooms WHERE academic_year_id = ? AND is_deleted = 0').run(parseInt(yearId))
+      // On re-submit (back-nav), reconcile by id instead of hard delete + recreate.
+      // A hard delete would violate FK RESTRICT on enrollments/teacher_schedule/
+      // timetable_entries if later steps already created data referencing these
+      // classrooms. Soft-delete removed ones, update existing, insert new.
+      const existingClassrooms = db.prepare('SELECT id FROM classrooms WHERE academic_year_id = ? AND is_deleted = 0').all(parseInt(yearId))
+      const submittedIds = new Set(classrooms.filter(c => c.id).map(c => c.id))
 
-      const classStmt = db.prepare(`
+      for (const old of existingClassrooms) {
+        if (!submittedIds.has(old.id)) {
+          db.prepare("UPDATE classrooms SET is_deleted = 1, deleted_at = datetime('now') WHERE id = ?").run(old.id)
+        }
+      }
+
+      const insertStmt = db.prepare(`
         INSERT INTO classrooms (classroom_uid, label, level_id, serie_id, academic_year_id, capacity, expected_tuition)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      const updateStmt = db.prepare(`
+        UPDATE classrooms SET label = ?, level_id = ?, serie_id = ?, capacity = ? WHERE id = ?
       `)
 
       const templateStmt = db.prepare(`
@@ -633,15 +642,26 @@ router.post('/step8', requireStep(8), (req, res) => {
       for (const c of classrooms) {
         if (!c.label || !c.level_id) continue
 
-        const uid = generateUUID()
-        const result = classStmt.run(
-          uid, c.label.trim(), c.level_id, c.serie_id || null,
-          parseInt(yearId), c.capacity || 50, c.expected_tuition || 0
-        )
+        let classroomId
+        let isNew = false
 
-        const classroomId = result.lastInsertRowid
+        if (c.id && existingClassrooms.some(old => old.id === c.id)) {
+          updateStmt.run(c.label.trim(), c.level_id, c.serie_id || null, c.capacity || 50, c.id)
+          classroomId = c.id
+        } else {
+          const uid = generateUUID()
+          const result = insertStmt.run(
+            uid, c.label.trim(), c.level_id, c.serie_id || null,
+            parseInt(yearId), c.capacity || 50, 0
+          )
+          classroomId = result.lastInsertRowid
+          isNew = true
+        }
 
-        // Auto-generate assessment templates from level config
+        // Only generate assessment templates for newly created classrooms —
+        // regenerating for existing ones would clobber any grades already entered.
+        if (!isNew) continue
+
         const configRow = db.prepare("SELECT value FROM app_settings WHERE key = ?")
           .get(`assessment_config_${c.level_id}`)
         const assessConfig = configRow ? JSON.parse(configRow.value) : { interrogations: 4, devoirs: 1, compositions: 1, max_score: 20 }
@@ -812,8 +832,8 @@ router.post('/step9', requireStep(9), (req, res) => {
   try {
     const { matricule_mode, teachers } = req.body
 
-    if (!matricule_mode || !['custom', 'educmaster', 'manual'].includes(matricule_mode)) {
-      return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Mode de matricule requis (custom, educmaster, manual)' })
+    if (!matricule_mode || !['custom', 'manual'].includes(matricule_mode)) {
+      return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Mode de matricule requis (custom, manual)' })
     }
 
     const db = getDb()
@@ -870,12 +890,15 @@ router.get('/student-template/:classroomId', (req, res) => {
   const mode = db.prepare("SELECT value FROM app_settings WHERE key = 'matricule_mode'").get()?.value || 'custom'
 
   const headers = ['Nom complet', 'Sexe (M/F)']
-  if (mode === 'educmaster') headers.push('Matricule Educmaster')
-  else if (mode === 'manual') headers.push('Matricule (optionnel)')
-  headers.push('Date de naissance', 'Lieu de naissance', 'Nationalité', 'Redoublant (O/N)', 'Nom du tuteur', 'Relation tuteur', 'Téléphone tuteur')
+  if (mode === 'manual') headers.push('Matricule (optionnel)')
+  headers.push('N° national Educmaster (optionnel)', 'Date de naissance', 'Lieu de naissance', 'Nationalité', 'Redoublant (O/N)', 'Nom du tuteur', 'Relation tuteur', 'Téléphone tuteur')
+
+  const example = ['KOUASSI Jean-Marie', 'M']
+  if (mode === 'manual') example.push('SCH-2026-001')
+  example.push('EDM-2026-0001234', '15/03/2014', 'Cotonou', 'Béninoise', 'N', 'KOUASSI Pierre', 'Père', '97010001')
 
   const wb = XLSX.utils.book_new()
-  const ws = XLSX.utils.aoa_to_sheet([headers])
+  const ws = XLSX.utils.aoa_to_sheet([headers, example])
 
   ws['!cols'] = headers.map((h) => ({ wch: h.length < 12 ? 14 : 22 }))
 
@@ -942,16 +965,16 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
       if (gender && !['M', 'F'].includes(gender)) { errors.push({ row: i + 2, message: `Sexe invalide: "${gender}" (M ou F)` }); return }
 
       let matricule = null
-      if (mode === 'educmaster') {
-        matricule = (row['Matricule Educmaster'] || '').toString().trim()
-        if (!matricule) { errors.push({ row: i + 2, message: 'Matricule Educmaster manquant' }); return }
-      } else if (mode === 'manual') {
+      if (mode === 'manual') {
         matricule = (row['Matricule (optionnel)'] || '').toString().trim() || null
       } else {
         seqNum++
         const year = new Date().getFullYear()
         matricule = `${schoolCode}/${year}/${String(seqNum).padStart(4, '0')}`
       }
+
+      // Educmaster national number is always optional, independent of matricule mode
+      const nationalNumber = (row['N° national Educmaster (optionnel)'] || '').toString().trim() || null
 
       const redoublantRaw = (row['Redoublant (O/N)'] || row['Redoublant'] || '').toString().trim().toUpperCase()
       const isRedoublant = ['O', 'OUI', 'Y', 'YES', '1'].includes(redoublantRaw) ? 1 : 0
@@ -960,6 +983,7 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
         full_name: name,
         gender: gender || null,
         matricule,
+        national_student_number: nationalNumber,
         birth_date: (row['Date de naissance'] || '').toString().trim() || null,
         birth_place: (row['Lieu de naissance'] || '').toString().trim() || null,
         nationality: (row['Nationalité'] || row['Nationalite'] || '').toString().trim() || null,
@@ -976,8 +1000,8 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
 
     // Insert students + enrollments + guardians
     const studentStmt = db.prepare(`
-      INSERT INTO students (student_uid, matricule, full_name, birth_date, birth_place, gender, nationality, is_redoublant)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO students (student_uid, matricule, full_name, birth_date, birth_place, gender, nationality, is_redoublant, national_student_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const enrollStmt = db.prepare(`
       INSERT INTO enrollments (enrollment_uid, student_id, classroom_id, academic_year_id)
@@ -992,7 +1016,7 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
     const prefix = getSchoolPrefix(db)
     db.transaction(() => {
       for (const s of valid) {
-        const result = studentStmt.run(generateStudentUID(prefix), s.matricule, s.full_name, s.birth_date, s.birth_place, s.gender, s.nationality, s.is_redoublant)
+        const result = studentStmt.run(generateStudentUID(prefix), s.matricule, s.full_name, s.birth_date, s.birth_place, s.gender, s.nationality, s.is_redoublant, s.national_student_number)
         const studentId = result.lastInsertRowid
         enrollStmt.run(generateUUID(), studentId, classroomId, yearId)
         autoAssignMandatoryFees(db, studentId, yearId)

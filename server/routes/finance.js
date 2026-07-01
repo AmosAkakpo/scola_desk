@@ -428,10 +428,13 @@ router.post('/tuition/:studentId/pay', requirePermission('finance.edit'), (req, 
   const db = getDb()
   const yearId = getYearId(db)
   const { studentId } = req.params
-  const { amount_received, payment_method, payer_name, reference, notes } = req.body
+  const { fees, amount_received, payment_method, payer_name, reference, notes } = req.body
 
-  const received = parseFloat(amount_received)
-  if (!received || received <= 0) return res.status(400).json({ error: 'INVALID_AMOUNT' })
+  if (!fees || !Array.isArray(fees) || fees.length === 0)
+    return res.status(400).json({ error: 'MISSING_FIELDS', message: 'Sélectionnez au moins un frais à payer' })
+
+  const amountReceived = parseFloat(amount_received) || 0
+  if (amountReceived <= 0) return res.status(400).json({ error: 'INVALID_AMOUNT', message: 'Montant remis invalide' })
 
   const student = db.prepare(`
     SELECT s.id, s.full_name, c.level_id FROM students s
@@ -441,31 +444,37 @@ router.post('/tuition/:studentId/pay', requirePermission('finance.edit'), (req, 
   if (!student) return res.status(404).json({ error: 'NOT_FOUND' })
 
   const summary = getStudentFeeSummary(db, studentId, yearId, student.level_id)
-  const amountToRecord = Math.min(received, summary.remaining)
-  const changeToReturn = received - amountToRecord
+  const feeMap = {}
+  summary.fees.forEach(f => { feeMap[f.fee_type_id] = f })
 
-  if (amountToRecord <= 0) return res.status(400).json({ error: 'NOTHING_OWED' })
-
-  const unpaidFees = summary.fees.filter(f => f.remaining > 0)
   const allocations = []
-  let left = amountToRecord
-  for (const fee of unpaidFees) {
-    if (left <= 0) break
-    const alloc = Math.min(left, fee.remaining)
-    allocations.push({ fee_type_id: fee.fee_type_id, amount: alloc })
-    left -= alloc
+  let totalToRecord = 0
+  for (const item of fees) {
+    const feeTypeId = parseInt(item.fee_type_id)
+    const requested = parseFloat(item.amount)
+    if (!feeTypeId || !requested || requested <= 0) continue
+    const fee = feeMap[feeTypeId]
+    if (!fee || fee.remaining <= 0) continue
+    const capped = Math.min(requested, fee.remaining)
+    allocations.push({ fee_type_id: feeTypeId, amount: capped })
+    totalToRecord += capped
   }
+
+  if (allocations.length === 0 || totalToRecord <= 0)
+    return res.status(400).json({ error: 'NOTHING_OWED', message: 'Aucun montant valide à enregistrer' })
+
+  const changeToReturn = Math.max(0, amountReceived - totalToRecord)
 
   let paymentId
   db.transaction(() => {
     const receipt = generateReceiptNumber(db, yearId, 'REC')
     const uid = generateUUID()
-    const paymentType = amountToRecord >= summary.remaining ? 'complete' : 'partial'
+    const paymentType = (totalToRecord >= summary.remaining) ? 'complete' : 'partial'
 
     db.prepare(`
       INSERT INTO payments (payment_uid, student_id, academic_year_id, amount, payment_date, payment_type, payment_method, receipt_number, payer_name, receiver_name, reference, notes, recorded_by)
       VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(uid, studentId, yearId, amountToRecord, paymentType, payment_method || 'especes', receipt, payer_name || null, req.user.fullName || null, reference || null, notes || null, req.user.id)
+    `).run(uid, studentId, yearId, totalToRecord, paymentType, payment_method || 'especes', receipt, payer_name || null, req.user.fullName || null, reference || null, notes || null, req.user.id)
 
     paymentId = db.prepare('SELECT last_insert_rowid() as id').get().id
 
@@ -477,13 +486,13 @@ router.post('/tuition/:studentId/pay', requirePermission('finance.edit'), (req, 
     db.prepare(`
       INSERT INTO ledger_transactions (transaction_uid, type, source_type, source_id, academic_year_id, amount, description, transaction_date, created_by)
       VALUES (?, 'income', 'payment', ?, ?, ?, ?, datetime('now'), ?)
-    `).run(generateUUID(), paymentId, yearId, amountToRecord, `Paiement scolarité - ${student.full_name}`, req.user.id)
+    `).run(generateUUID(), paymentId, yearId, totalToRecord, `Paiement scolarité - ${student.full_name}`, req.user.id)
   })()
 
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId)
   payment.allocations = db.prepare('SELECT pa.*, ft.name as fee_name FROM payment_allocations pa JOIN fee_types ft ON ft.id = pa.fee_type_id WHERE pa.payment_id = ?').all(paymentId)
 
-  return res.json({ success: true, payment, amount_recorded: amountToRecord, change_to_return: changeToReturn })
+  return res.json({ success: true, payment, amount_recorded: totalToRecord, change_to_return: changeToReturn })
 })
 
 // ─── SALARIES ───────────────────────────────────────────────

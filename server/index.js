@@ -38,6 +38,12 @@ app.use('/api/report-cards', require('./routes/reportcards'))
 app.use('/api/finance', require('./routes/finance'))
 app.use('/api/attendance', require('./routes/attendance'))
 
+// Global error handler — ensures every error response is JSON, not HTML
+app.use((err, req, res, next) => {
+    console.error('[UNHANDLED ERROR]', err)
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Erreur serveur' })
+})
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER] ScolaDesk running on port ${PORT}`)
 })
