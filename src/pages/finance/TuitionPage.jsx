@@ -47,7 +47,6 @@ export default function TuitionPage() {
           <h1 className="text-xl font-medium text-steel-900">Paiements scolarité</h1>
           <p className="text-sm text-steel-500 mt-0.5">{students.length} élève(s) — {formatXOF(totalPaid)} / {formatXOF(totalDue)}</p>
         </div>
-        <button onClick={() => navigate('/finance')} className="px-3 py-2 text-sm text-steel-600 hover:text-steel-800">← Tableau de bord</button>
       </div>
 
       {/* Filters */}

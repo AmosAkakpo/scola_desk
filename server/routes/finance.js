@@ -4,6 +4,7 @@ const { getDb } = require('../db/init')
 const { requireAuth } = require('../middleware/requireAuth')
 const { requirePermission } = require('../middleware/requirePermission')
 const { generateUUID } = require('../utils/uid')
+const { autoAssignMandatoryFees } = require('../utils/fees')
 
 router.use(requireAuth)
 
@@ -64,8 +65,9 @@ function getStudentFeeSummary(db, studentId, yearId, levelId) {
   const feeList = fees.map(f => {
     const amount = getFeeAmountForStudent(db, f.fee_type_id, levelId)
     const paid = paidMap[f.fee_type_id] || 0
+    const effectivePaid = Math.min(paid, amount) // cap paid to amount if fee was lowered
     totalDue += amount
-    totalPaid += paid
+    totalPaid += effectivePaid
     return {
       fee_type_id: f.fee_type_id,
       name: f.name,
@@ -73,12 +75,12 @@ function getStudentFeeSummary(db, studentId, yearId, levelId) {
       is_mandatory: f.is_mandatory,
       is_system: f.is_system,
       amount_due: amount,
-      amount_paid: paid,
-      remaining: amount - paid,
+      amount_paid: paid, // show actual paid (history is accurate)
+      remaining: Math.max(0, amount - paid),
     }
   })
 
-  const remaining = totalDue - totalPaid
+  const remaining = Math.max(0, totalDue - totalPaid)
   const status = totalPaid === 0 ? 'unpaid' : remaining <= 0 ? 'paid' : 'partial'
 
   return { fees: feeList, totalDue, totalPaid, remaining, status }
@@ -197,6 +199,11 @@ router.post('/fee-types', requirePermission('finance.edit'), (req, res) => {
     for (const a of amounts) {
       amtStmt.run(ftId, a.level_id || null, parseFloat(a.amount))
     }
+
+    if (is_mandatory) {
+      const enrolled = db.prepare('SELECT student_id FROM enrollments WHERE academic_year_id = ? AND is_deleted = 0').all(yearId)
+      for (const e of enrolled) autoAssignMandatoryFees(db, e.student_id, yearId)
+    }
   })()
 
   return res.json({ success: true })
@@ -224,6 +231,11 @@ router.put('/fee-types/:id', requirePermission('finance.edit'), (req, res) => {
         amtStmt.run(ft.id, a.level_id || null, parseFloat(a.amount))
       }
     }
+
+    if (is_mandatory || ft.is_system) {
+      const enrolled = db.prepare('SELECT student_id FROM enrollments WHERE academic_year_id = ? AND is_deleted = 0').all(yearId)
+      for (const e of enrolled) autoAssignMandatoryFees(db, e.student_id, yearId)
+    }
   })()
 
   return res.json({ success: true })
@@ -248,6 +260,15 @@ router.delete('/fee-types/:id', requirePermission('finance.edit'), (req, res) =>
 
 // ─── SUBSCRIPTION INFO (Mon Abonnement) ────────────────────
 
+function extractDeadlineMonth(val) {
+  if (!val) return null
+  const s = String(val).trim()
+  const dateMatch = s.match(/^(\d{4})-(\d{1,2})/)
+  if (dateMatch) return parseInt(dateMatch[2])
+  const n = parseInt(s)
+  return (n >= 1 && n <= 12) ? n : null
+}
+
 router.get('/subscription', (req, res) => {
   const db = getDb()
   const license = db.prepare('SELECT * FROM license_state LIMIT 1').get()
@@ -255,6 +276,15 @@ router.get('/subscription', (req, res) => {
   const settings = db.prepare("SELECT key, value FROM app_settings WHERE key IN ('semester_1_deadline', 'semester_2_deadline', 'semester_3_deadline')").all()
   const deadlines = {}
   settings.forEach(s => { deadlines[s.key] = s.value })
+
+  // Derive deadline date from current academic year's start year + stored month number
+  const ayId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const ayLabel = ayId ? (db.prepare('SELECT label FROM academic_years WHERE id = ?').get(ayId)?.label || '') : ''
+  const startYear = ayLabel.split('-')[0]?.trim() || String(new Date().getFullYear())
+  const month1 = extractDeadlineMonth(deadlines.semester_1_deadline)
+  const first_deadline = (month1 && startYear)
+    ? `${startYear}-${String(month1).padStart(2, '0')}-01`
+    : null
 
   return res.json({
     rate_per_student: license?.rate_per_student || 0,
@@ -265,7 +295,7 @@ router.get('/subscription', (req, res) => {
     amount_paid: license?.amount_paid || 0,
     installation_fee: license?.installation_fee || 0,
     installation_fee_paid: !!license?.installation_fee_paid,
-    first_deadline: deadlines.semester_1_deadline || null,
+    first_deadline,
   })
 })
 
@@ -290,6 +320,9 @@ router.get('/tuition', requirePermission('finance.view'), (req, res) => {
   studentsQuery += ' ORDER BY c.label, s.full_name'
 
   const students = db.prepare(studentsQuery).all(...params)
+
+  // Backfill: ensure every enrolled student has selections for all current mandatory fees
+  for (const s of students) autoAssignMandatoryFees(db, s.student_id, yearId)
 
   const rows = students.map(s => {
     const summary = getStudentFeeSummary(db, s.student_id, yearId, s.level_id)

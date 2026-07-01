@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import api from '../../utils/api'
 
 function formatXOF(n) {
@@ -8,8 +7,6 @@ function formatXOF(n) {
 
 export default function FinanceSettingsPage() {
   const [tab, setTab] = useState('fees')
-  const navigate = useNavigate()
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -17,7 +14,6 @@ export default function FinanceSettingsPage() {
           <h1 className="text-xl font-medium text-steel-900">Paramètres financiers</h1>
           <p className="text-sm text-steel-500 mt-0.5">Types de frais et catégories de dépenses</p>
         </div>
-        <button onClick={() => navigate('/finance')} className="px-3 py-2 text-sm text-steel-600 hover:text-steel-800">← Tableau de bord</button>
       </div>
 
       <div className="flex gap-1 border-b border-steel-200 mb-6">

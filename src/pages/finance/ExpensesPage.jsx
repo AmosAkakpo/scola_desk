@@ -35,7 +35,6 @@ export default function ExpensesPage() {
           <p className="text-sm text-steel-500 mt-0.5">{expenses.length} dépense(s) — {formatXOF(totalAmount)}</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => navigate('/finance')} className="px-3 py-2 text-sm text-steel-600 hover:text-steel-800">← Tableau de bord</button>
           <button onClick={() => setShowAdd(true)} className="px-3 py-2 bg-brand hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-colors">
             + Ajouter
           </button>

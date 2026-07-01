@@ -91,14 +91,10 @@ function LoadingScreen() {
 }
 
 function ProtectedApp({ schoolInfo }) {
-  const { isAuthenticated, logout } = useAuth()
-  const [loggedIn, setLoggedIn] = useState(isAuthenticated)
+  const { isAuthenticated, loading } = useAuth()
 
-  useEffect(() => { setLoggedIn(isAuthenticated) }, [isAuthenticated])
-
-  if (!loggedIn) {
-    return <LoginPage onLogin={() => setLoggedIn(true)} />
-  }
+  if (loading) return <LoadingScreen />
+  if (!isAuthenticated) return <LoginPage onLogin={() => {}} />
 
   return (
     <BrowserRouter>

@@ -1,36 +1,80 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
 import api from '../utils/api'
 
 const AuthContext = createContext(null)
 
+const SESSION_KEY = 'scola_token'
+const IDLE_MS = 4 * 60 * 60 * 1000       // 4 hours of inactivity → logout
+const WARN_BEFORE_MS = 5 * 60 * 1000     // show warning 5 min before
+
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null)
-    const [token, setToken] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [idleWarning, setIdleWarning] = useState(false)
+    const warnRef = useRef(null)
+    const logoutRef = useRef(null)
+    const userRef = useRef(null)
 
-    // On mount, check if we have a token in memory
-    // Token lives only in JS memory — never localStorage
-    useEffect(() => {
-        setLoading(false)
+    useEffect(() => { userRef.current = user }, [user])
+
+    const doLogout = useCallback(async () => {
+        clearTimeout(warnRef.current)
+        clearTimeout(logoutRef.current)
+        try { await api.post('/api/auth/logout') } catch {}
+        sessionStorage.removeItem(SESSION_KEY)
+        delete api.defaults.headers.common['Authorization']
+        setUser(null)
+        setIdleWarning(false)
     }, [])
+
+    const resetIdle = useCallback(() => {
+        if (!userRef.current) return
+        clearTimeout(warnRef.current)
+        clearTimeout(logoutRef.current)
+        setIdleWarning(false)
+        warnRef.current = setTimeout(() => setIdleWarning(true), IDLE_MS - WARN_BEFORE_MS)
+        logoutRef.current = setTimeout(doLogout, IDLE_MS)
+    }, [doLogout])
+
+    // Restore session from sessionStorage on mount (survives reload, cleared on window close)
+    useEffect(() => {
+        const saved = sessionStorage.getItem(SESSION_KEY)
+        if (!saved) { setLoading(false); return }
+        api.defaults.headers.common['Authorization'] = `Bearer ${saved}`
+        api.get('/api/auth/me')
+            .then(res => setUser(res.data.user))
+            .catch(() => {
+                // Token expired or invalid — clear and show login
+                sessionStorage.removeItem(SESSION_KEY)
+                delete api.defaults.headers.common['Authorization']
+            })
+            .finally(() => setLoading(false))
+    }, [])
+
+    // Activity tracking — reset idle timer on any user interaction
+    useEffect(() => {
+        if (!user) {
+            clearTimeout(warnRef.current)
+            clearTimeout(logoutRef.current)
+            return
+        }
+        const events = ['mousedown', 'keydown', 'touchstart', 'wheel']
+        events.forEach(e => window.addEventListener(e, resetIdle, { passive: true }))
+        resetIdle()
+        return () => {
+            events.forEach(e => window.removeEventListener(e, resetIdle))
+            clearTimeout(warnRef.current)
+            clearTimeout(logoutRef.current)
+        }
+    }, [user, resetIdle])
 
     async function login(username, password) {
         const res = await api.post('/api/auth/login', { username, password })
-        const { token: newToken, user: newUser } = res.data
-        setToken(newToken)
-        setUser(newUser)
-        // Attach token to all future requests
-        api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
-        return newUser
-    }
-
-    async function logout() {
-        try {
-            await api.post('/api/auth/logout')
-        } catch { }
-        setToken(null)
-        setUser(null)
-        delete api.defaults.headers.common['Authorization']
+        const { token, user: u } = res.data
+        sessionStorage.setItem(SESSION_KEY, token)
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+        setUser(u)
+        return u
     }
 
     function hasPermission(code) {
@@ -38,20 +82,19 @@ export function AuthProvider({ children }) {
         const perms = user.permissions || []
         if (perms.includes('*')) return true
         if (perms.includes(code)) return true
-        const domain = code.split('.')[0]
-        if (perms.includes(`${domain}.*`)) return true
-        return false
+        return perms.includes(`${code.split('.')[0]}.*`)
     }
 
     return (
         <AuthContext.Provider value={{
             user,
-            token,
             loading,
             login,
-            logout,
+            logout: doLogout,
             hasPermission,
-            isAuthenticated: !!user
+            isAuthenticated: !!user,
+            idleWarning,
+            stayLoggedIn: resetIdle,
         }}>
             {children}
         </AuthContext.Provider>

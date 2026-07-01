@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import api from '../../utils/api'
 
 function formatXOF(n) {
@@ -31,8 +30,6 @@ export default function SalariesPage() {
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7))
   const [showPay, setShowPay] = useState(null)
-  const navigate = useNavigate()
-
   function load() {
     setLoading(true)
     api.get(`/api/finance/salaries?month=${month}`).then(res => {
@@ -55,7 +52,6 @@ export default function SalariesPage() {
           <h1 className="text-xl font-medium text-steel-900">Salaires</h1>
           <p className="text-sm text-steel-500 mt-0.5">{paid.length}/{teachers.length} versés — {formatXOF(totalPaid)} ce mois</p>
         </div>
-        <button onClick={() => navigate('/finance')} className="px-3 py-2 text-sm text-steel-600 hover:text-steel-800">← Tableau de bord</button>
       </div>
 
       <div className="flex gap-3 mb-4">

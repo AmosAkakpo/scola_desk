@@ -14,23 +14,31 @@ function getCurrentStep() {
   return row ? parseInt(row.value) : 1
 }
 
-function setCurrentStep(step) {
+// force=true is used only by the /back endpoint to allow stepping backward.
+// All step handlers call without force, so the counter never regresses when
+// resubmitting a previously completed step.
+function setCurrentStep(step, force = false) {
   const db = getDb()
+  const current = getCurrentStep()
+  const target = force ? step : Math.max(current, step)
   const existing = db.prepare("SELECT key FROM app_settings WHERE key = 'onboarding_step'").get()
   if (existing) {
-    db.prepare("UPDATE app_settings SET value = ?, updated_at = datetime('now') WHERE key = 'onboarding_step'").run(String(step))
+    db.prepare("UPDATE app_settings SET value = ?, updated_at = datetime('now') WHERE key = 'onboarding_step'").run(String(target))
   } else {
-    db.prepare("INSERT INTO app_settings (key, value) VALUES ('onboarding_step', ?)").run(String(step))
+    db.prepare("INSERT INTO app_settings (key, value) VALUES ('onboarding_step', ?)").run(String(target))
   }
 }
 
+// Only blocks if the user is trying to jump FORWARD past unfinished steps.
+// Resubmitting a previously completed step is always allowed — this is the
+// core fix for back-navigation errors.
 function requireStep(expected) {
   return (req, res, next) => {
     const current = getCurrentStep()
-    if (current !== expected) {
+    if (current < expected) {
       return res.status(400).json({
         error: 'WRONG_STEP',
-        message: `Étape actuelle: ${current}. Cette action requiert l'étape ${expected}.`,
+        message: `Complétez d'abord les étapes précédentes (étape actuelle: ${current}).`,
         current_step: current,
       })
     }
@@ -44,7 +52,7 @@ router.post('/back', (req, res) => {
   if (current <= 1) {
     return res.status(400).json({ error: 'AT_START', message: 'Déjà à la première étape' })
   }
-  setCurrentStep(current - 1)
+  setCurrentStep(current - 1, true) // force=true: only place where regression is intentional
   return res.json({ success: true, current_step: current - 1 })
 })
 
@@ -949,6 +957,19 @@ router.post('/upload-students/:classroomId', express.raw({ type: '*/*', limit: '
 
     if (rows.length === 0) return res.status(400).json({ error: 'EMPTY', message: 'Fichier vide' })
 
+    // Replace semantics: wipe existing students in this classroom before re-importing
+    const existingEnrollments = db.prepare('SELECT student_id FROM enrollments WHERE classroom_id = ? AND is_deleted = 0').all(classroomId)
+    if (existingEnrollments.length > 0) {
+      db.transaction(() => {
+        for (const e of existingEnrollments) {
+          db.prepare('DELETE FROM student_fee_selections WHERE student_id = ?').run(e.student_id)
+          db.prepare('DELETE FROM guardians WHERE student_id = ?').run(e.student_id)
+          db.prepare('DELETE FROM enrollments WHERE student_id = ? AND classroom_id = ?').run(e.student_id, classroomId)
+          db.prepare('DELETE FROM students WHERE id = ?').run(e.student_id)
+        }
+      })()
+    }
+
     const errors = []
     const valid = []
 
@@ -1064,6 +1085,7 @@ router.delete('/class-students/:classroomId', (req, res) => {
 
   db.transaction(() => {
     for (const e of enrollments) {
+      db.prepare('DELETE FROM student_fee_selections WHERE student_id = ?').run(e.student_id)
       db.prepare('DELETE FROM guardians WHERE student_id = ?').run(e.student_id)
       db.prepare('DELETE FROM enrollments WHERE student_id = ? AND classroom_id = ?').run(e.student_id, classroomId)
       db.prepare('DELETE FROM students WHERE id = ?').run(e.student_id)
@@ -1204,19 +1226,39 @@ router.post('/step12', requireStep(12), (req, res) => {
           .run(sysId, license?.rate_per_student || 0)
       }
 
-      // Create user-defined fees
+      // Create user-defined fees.
+      // On back-nav resubmit: wipe existing user-defined fees and re-insert from
+      // submitted data. Safe during onboarding because no payments exist yet.
+      // student_fee_selections for these fees are also cleared and rebuilt below.
       if (fees && Array.isArray(fees)) {
-        const feeStmt = db.prepare('INSERT OR IGNORE INTO fee_types (academic_year_id, name, is_mandatory, display_order) VALUES (?, ?, ?, ?)')
-        const amtStmt = db.prepare('INSERT OR IGNORE INTO fee_type_amounts (fee_type_id, level_id, amount) VALUES (?, ?, ?)')
+        const userFeeIds = db.prepare(
+          'SELECT id FROM fee_types WHERE academic_year_id = ? AND is_system = 0'
+        ).all(yearId).map(r => r.id)
+
+        for (const id of userFeeIds) {
+          db.prepare('DELETE FROM student_fee_selections WHERE fee_type_id = ?').run(id)
+          db.prepare('DELETE FROM fee_type_amounts WHERE fee_type_id = ?').run(id)
+          db.prepare('DELETE FROM fee_types WHERE id = ?').run(id)
+        }
+
+        const feeStmt = db.prepare('INSERT INTO fee_types (academic_year_id, name, is_mandatory, display_order) VALUES (?, ?, ?, ?)')
+        const amtStmt = db.prepare('INSERT INTO fee_type_amounts (fee_type_id, level_id, amount) VALUES (?, ?, ?)')
 
         for (const f of fees) {
           if (!f.name?.trim() || !f.amounts?.length) continue
           feeStmt.run(yearId, f.name.trim(), f.is_mandatory ? 1 : 0, f.display_order ?? 0)
-          const ftId = db.prepare('SELECT id FROM fee_types WHERE academic_year_id = ? AND name = ?').get(yearId, f.name.trim())?.id
-          if (!ftId) continue
+          const ftId = db.prepare('SELECT last_insert_rowid() as id').get().id
           for (const a of f.amounts) {
             if (a.amount > 0) amtStmt.run(ftId, a.level_id || null, parseFloat(a.amount))
           }
+        }
+
+        // Rebuild mandatory fee selections for all enrolled students after fee sync
+        const enrolledStudents = db.prepare(
+          'SELECT student_id FROM enrollments WHERE academic_year_id = ? AND is_deleted = 0'
+        ).all(yearId)
+        for (const s of enrolledStudents) {
+          autoAssignMandatoryFees(db, s.student_id, yearId)
         }
       }
     })()

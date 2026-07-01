@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import api from '../../utils/api'
 
 function formatXOF(n) {
@@ -59,8 +58,6 @@ function SubscriptionTable({ title, subtitle, studentCount, rate, firstDeadline 
 export default function SubscriptionPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
-  const navigate = useNavigate()
-
   useEffect(() => {
     api.get('/api/finance/subscription').then(res => {
       setData(res.data)
@@ -80,7 +77,6 @@ export default function SubscriptionPage() {
           <h1 className="text-xl font-medium text-steel-900">Mon abonnement</h1>
           <p className="text-sm text-steel-500 mt-0.5">Licence ScolaDesk — {tierLabel}</p>
         </div>
-        <button onClick={() => navigate('/finance')} className="px-3 py-2 text-sm text-steel-600 hover:text-steel-800">← Finance</button>
       </div>
 
       {/* License info bar */}
