@@ -37,10 +37,9 @@ export default function ReportCardsPage() {
     loadSnapshots()
   }
 
-  async function handlePrintAll() {
+  function handlePrintAll() {
     if (snapshots.length === 0) return
-    // Open each in sequence for printing — or open first and let user batch
-    navigate(`/report-cards/${snapshots[0].id}?batch=${classroomId}&semester=${semester}`)
+    navigate(`/report-cards/batch?classroomId=${classroomId}&semester=${semester}`)
   }
 
   return (

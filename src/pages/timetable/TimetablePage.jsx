@@ -24,6 +24,76 @@ function subjectColor(name) {
   return palette[h % palette.length]
 }
 
+function drawTimetableOnPage(doc, label, yearLabel, entries, activeDays, dayStart, dayEnd, secondLineFn, W, H) {
+  const margin = 10, timeColW = 18, headerH = 15, dayRowH = 7
+  const startMin = toMin(dayStart), endMin = toMin(dayEnd)
+  const slots = []
+  for (let m = startMin; m < endMin; m += 30) slots.push(m)
+  if (!slots.length) return
+
+  const gridW = W - 2 * margin - timeColW
+  const dayW = gridW / activeDays.length
+  const gridTop = margin + headerH
+  const slotTop = gridTop + dayRowH
+  const slotH = (H - margin - slotTop) / slots.length
+
+  // Title
+  doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(15, 23, 42)
+  doc.text(label, margin, margin + 7)
+  if (yearLabel) {
+    doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 116, 139)
+    doc.text(yearLabel, margin, margin + 12)
+  }
+
+  // Day header row
+  doc.setLineWidth(0.2); doc.setFillColor(241, 245, 249); doc.setDrawColor(203, 213, 225)
+  doc.rect(margin, gridTop, timeColW, dayRowH, 'FD')
+  activeDays.forEach((d, di) => {
+    const x = margin + timeColW + di * dayW
+    doc.setFillColor(241, 245, 249); doc.rect(x, gridTop, dayW, dayRowH, 'FD')
+    doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor(71, 85, 105)
+    doc.text(DAY_LABELS[d], x + dayW / 2, gridTop + dayRowH / 2 + 1.5, { align: 'center' })
+  })
+
+  // Slot grid
+  slots.forEach((m, si) => {
+    const y = slotTop + si * slotH
+    doc.setFillColor(248, 250, 252); doc.setDrawColor(226, 232, 240)
+    doc.rect(margin, y, timeColW, slotH, 'FD')
+    if (m % 60 === 0) {
+      doc.setFontSize(5.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(100, 116, 139)
+      doc.text(toTime(m), margin + timeColW / 2, y + Math.min(3, slotH - 1), { align: 'center' })
+    }
+    activeDays.forEach((_, di) => {
+      const x = margin + timeColW + di * dayW
+      doc.setFillColor(255, 255, 255); doc.rect(x, y, dayW, slotH, 'FD')
+    })
+  })
+
+  // Entry blocks
+  entries.forEach(e => {
+    const dayIdx = activeDays.indexOf(e.day_of_week)
+    if (dayIdx < 0) return
+    const startSlot = (toMin(e.start_time) - startMin) / 30
+    const endSlot = (toMin(e.end_time) - startMin) / 30
+    if (startSlot < 0 || endSlot > slots.length || endSlot <= startSlot) return
+    const x = margin + timeColW + dayIdx * dayW + 0.5
+    const y = slotTop + startSlot * slotH + 0.5
+    const cW = dayW - 1, cH = (endSlot - startSlot) * slotH - 1
+    doc.setFillColor(236, 253, 245); doc.setDrawColor(134, 239, 172); doc.setLineWidth(0.3)
+    doc.rect(x, y, cW, cH, 'FD'); doc.setLineWidth(0.2)
+    doc.setFontSize(6); doc.setFont('helvetica', 'bold'); doc.setTextColor(15, 23, 42)
+    const subLines = doc.splitTextToSize(e.subject_name || '', cW - 1.5)
+    doc.text(subLines[0], x + cW / 2, y + Math.min(4, cH * 0.55), { align: 'center' })
+    const second = secondLineFn(e)
+    if (second && cH > 7) {
+      doc.setFontSize(5.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(71, 85, 105)
+      const secLines = doc.splitTextToSize(second, cW - 1.5)
+      doc.text(secLines[0], x + cW / 2, y + Math.min(7.5, cH * 0.82), { align: 'center' })
+    }
+  })
+}
+
 export default function TimetablePage() {
   const { user } = useAuth()
   const [tab, setTab] = useState('class')
@@ -35,6 +105,12 @@ export default function TimetablePage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showConfig, setShowConfig] = useState(false)
+  const [editEntry, setEditEntry] = useState(null)
+  const [showPdfModal, setShowPdfModal] = useState(false)
+  const [pdfSelections, setPdfSelections] = useState([])
+  const [pdfOrientation, setPdfOrientation] = useState('landscape')
+  const [generating, setGenerating] = useState(false)
+  const [pdfBlobUrl, setPdfBlobUrl] = useState(null)
 
   useEffect(() => {
     Promise.all([api.get('/api/timetable/config'), api.get('/api/timetable/options')]).then(([cfg, opt]) => {
@@ -67,41 +143,63 @@ export default function TimetablePage() {
     span: Math.max(1, (toMin(e.end_time) - toMin(e.start_time)) / 30),
   }))
 
-  async function deleteEntry(id) { await api.delete(`/api/timetable/entry/${id}`); loadGrid() }
+  async function deleteEntry(id) {
+    await api.delete(`/api/timetable/entry/${id}`)
+    setEditEntry(null)
+    loadGrid()
+  }
 
-  function printView() {
-    const title = tab === 'class' ? `Emploi du temps — ${data?.classroom?.label || ''}` : `Emploi du temps — ${data?.teacher?.full_name || ''}`
-    const cover = {}; for (const d of days) cover[d] = new Array(slots.length).fill(null)
-    for (const b of blocks) {
-      if (!cover[b.day]) continue
-      const s = b.topSlot, span = Math.min(b.span, slots.length - s)
-      cover[b.day][s] = { start: true, b, span }
-      for (let i = 1; i < span; i++) cover[b.day][s + i] = { covered: true }
+  async function buildPdf(selectionIds, orientation) {
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' })
+    const W = orientation === 'landscape' ? 297 : 210
+    const H = orientation === 'landscape' ? 210 : 297
+    const isClass = tab === 'class'
+    const list = isClass ? classrooms : teachers
+    const selected = list.filter(item => selectionIds.includes(String(item.id)))
+    for (let i = 0; i < selected.length; i++) {
+      if (i > 0) doc.addPage()
+      const item = selected[i]
+      const res = await api.get(isClass ? `/api/timetable/class/${item.id}` : `/api/timetable/teacher/${item.id}`)
+      const pageLabel = isClass ? `Emploi du temps — ${item.label}` : `Emploi du temps — ${item.full_name}`
+      const secondFn = isClass ? (e => e.teacher_name || '') : (e => e.classroom_label || '')
+      drawTimetableOnPage(doc, pageLabel, config.year_label || '', res.data.entries || [], config.days || [1, 2, 3, 4, 5], config.day_start, config.day_end, secondFn, W, H)
     }
-    const rows = slots.map((m, si) => {
-      const tds = days.map(d => {
-        const c = cover[d][si]
-        if (c?.covered) return ''
-        if (c?.start) {
-          const e = c.b.entry, second = tab === 'class' ? (e.teacher_name || '') : (e.classroom_label || '')
-          return `<td rowspan="${c.span}" class="ent">${e.subject_name}<br><small>${second}${e.room ? ' · ' + e.room : ''}</small></td>`
-        }
-        return '<td></td>'
-      }).join('')
-      return `<tr><th class="t">${toTime(m)}</th>${tds}</tr>`
-    }).join('')
-    const w = window.open('', '_blank')
-    w.document.write(`<html><head><title>${title}</title><style>
-      body{font-family:Arial,sans-serif;padding:16px}h2{margin:0 0 12px}
-      table{border-collapse:collapse;width:100%;font-size:11px}
-      th,td{border:1px solid #cbd5e1;padding:4px;text-align:center;vertical-align:middle}
-      th.t{background:#f1f5f9;width:54px;font-weight:normal;color:#475569}thead th{background:#f1f5f9}
-      td.ent{background:#ecfdf5;font-weight:600}td.ent small{font-weight:400;color:#475569}
-      @media print{@page{size:landscape}}
-    </style></head><body><h2>${title}</h2>
-    <table><thead><tr><th class="t"></th>${days.map(d => `<th>${DAY_LABELS[d]}</th>`).join('')}</tr></thead>
-    <tbody>${rows}</tbody></table></body></html>`)
-    w.document.close(); w.focus(); w.print()
+    return doc
+  }
+
+  async function previewPdf() {
+    if (!pdfSelections.length) return
+    setGenerating(true)
+    if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl)
+    try {
+      const doc = await buildPdf(pdfSelections, pdfOrientation)
+      setPdfBlobUrl(URL.createObjectURL(doc.output('blob')))
+    } catch (err) { console.error('PDF preview error', err) }
+    setGenerating(false)
+  }
+
+  async function downloadPdf() {
+    if (!pdfSelections.length) return
+    setGenerating(true)
+    try {
+      const doc = await buildPdf(pdfSelections, pdfOrientation)
+      const yearSlug = (config.year_label || 'edt').replace(/[^a-z0-9]/gi, '_')
+      doc.save(`EDT_${yearSlug}.pdf`)
+    } catch (err) { console.error('PDF download error', err) }
+    setGenerating(false)
+  }
+
+  function openPdfModal() {
+    const id = tab === 'class' ? classId : teacherId
+    if (id) setPdfSelections([id])
+    setShowPdfModal(true)
+  }
+
+  function closePdfModal() {
+    if (pdfBlobUrl) { URL.revokeObjectURL(pdfBlobUrl); setPdfBlobUrl(null) }
+    setShowPdfModal(false)
+    setPdfSelections([])
   }
 
   const gridHeight = slots.length * ROW_H
@@ -111,11 +209,14 @@ export default function TimetablePage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-medium text-steel-900">Emploi du temps</h1>
-          <p className="text-sm text-steel-500 mt-0.5">Grille de 30 min · {config.day_start}–{config.day_end}</p>
+          <p className="text-sm text-steel-500 mt-0.5">Grille de 30 min · {config.day_start}–{config.day_end}{config.year_label ? ` · ${config.year_label}` : ''}</p>
         </div>
         <div className="flex items-center gap-2">
           {user?.role === 'admin' && <button onClick={() => setShowConfig(true)} className="px-3 py-2 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Réglages</button>}
-          <button onClick={printView} className="px-3 py-2 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Imprimer</button>
+          <button onClick={openPdfModal} className="px-3 py-2 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50 flex items-center gap-1.5">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            PDF / Imprimer
+          </button>
         </div>
       </div>
 
@@ -166,15 +267,13 @@ export default function TimetablePage() {
                       const e = b.entry
                       const second = tab === 'class' ? e.teacher_name : e.classroom_label
                       return (
-                        <div key={e.id} className={`absolute left-1 right-1 rounded-md border px-1.5 py-1 text-[10px] leading-tight overflow-hidden group ${subjectColor(e.subject_name)}`}
+                        <div key={e.id}
+                          onClick={() => setEditEntry(e)}
+                          className={`absolute left-1 right-1 rounded-md border px-1.5 py-1 text-[10px] leading-tight overflow-hidden group cursor-pointer hover:brightness-95 transition-all ${subjectColor(e.subject_name)}`}
                           style={{ top: b.topSlot * ROW_H + 1, height: b.span * ROW_H - 2 }}>
                           <p className="font-semibold truncate">{e.subject_name}</p>
                           <p className="truncate opacity-80">{second || '—'}</p>
                           <p className="opacity-60">{e.start_time}–{e.end_time}{e.room ? ` · ${e.room}` : ''}</p>
-                          {tab === 'class' && (
-                            <button onClick={() => deleteEntry(e.id)}
-                              className="absolute top-0.5 right-0.5 w-4 h-4 rounded bg-white/70 text-steel-400 hover:text-red-500 hidden group-hover:flex items-center justify-center text-[10px]">✕</button>
-                          )}
                         </div>
                       )
                     })}
@@ -187,6 +286,92 @@ export default function TimetablePage() {
       </div>
 
       {showConfig && <ConfigModal config={config} onClose={() => setShowConfig(false)} onSaved={(c) => { setConfig(c); setShowConfig(false) }} />}
+      {editEntry && (
+        <EditEntryModal
+          entry={editEntry}
+          config={config}
+          days={days}
+          onClose={() => setEditEntry(null)}
+          onSaved={() => { setEditEntry(null); loadGrid() }}
+          onDeleted={() => deleteEntry(editEntry.id)}
+        />
+      )}
+      {showPdfModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl flex flex-col" style={{ width: 820, maxHeight: '92vh' }}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-steel-200 shrink-0">
+              <h2 className="text-sm font-semibold text-steel-800">Générer PDF</h2>
+              <button onClick={closePdfModal} className="text-steel-400 hover:text-steel-600 text-lg leading-none">✕</button>
+            </div>
+
+            <div className="flex flex-1 overflow-hidden" style={{ minHeight: 0 }}>
+              {/* Left: class / teacher selection */}
+              <div className="w-56 border-r border-steel-200 flex flex-col shrink-0">
+                <div className="px-3 py-2 border-b border-steel-100 flex gap-3">
+                  <button onClick={() => setPdfSelections((tab === 'class' ? classrooms : teachers).map(x => String(x.id)))}
+                    className="text-xs text-brand hover:underline">Tout</button>
+                  <button onClick={() => setPdfSelections([])}
+                    className="text-xs text-steel-400 hover:underline">Aucun</button>
+                </div>
+                <div className="overflow-y-auto flex-1 p-2 space-y-0.5">
+                  {(tab === 'class' ? classrooms : teachers).map(item => (
+                    <label key={item.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-steel-50 cursor-pointer">
+                      <input type="checkbox" className="accent-brand"
+                        checked={pdfSelections.includes(String(item.id))}
+                        onChange={e => {
+                          const id = String(item.id)
+                          setPdfSelections(prev => e.target.checked ? [...prev, id] : prev.filter(x => x !== id))
+                          setPdfBlobUrl(null)
+                        }} />
+                      <span className="text-sm text-steel-700 leading-snug">{tab === 'class' ? item.label : item.full_name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Right: options + preview */}
+              <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-steel-200 shrink-0 flex-wrap">
+                  <span className="text-xs text-steel-500 mr-1">Orientation :</span>
+                  {['landscape', 'portrait'].map(o => (
+                    <button key={o} onClick={() => { setPdfOrientation(o); setPdfBlobUrl(null) }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${pdfOrientation === o ? 'bg-brand text-white border-brand' : 'bg-white border-steel-200 text-steel-600 hover:bg-steel-50'}`}>
+                      {o === 'landscape' ? 'Paysage' : 'Portrait'}
+                    </button>
+                  ))}
+                  <div className="ml-auto flex gap-2">
+                    <button onClick={previewPdf} disabled={!pdfSelections.length || generating}
+                      className="px-3 py-1.5 border border-steel-200 text-steel-600 hover:bg-steel-50 disabled:opacity-40 rounded-lg text-xs font-medium transition-colors">
+                      {generating ? 'Génération...' : 'Aperçu'}
+                    </button>
+                    <button onClick={downloadPdf} disabled={!pdfSelections.length || generating}
+                      className="px-3 py-1.5 bg-brand hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-xs font-medium transition-colors">
+                      Télécharger PDF
+                    </button>
+                  </div>
+                </div>
+
+                {pdfBlobUrl ? (
+                  <iframe src={pdfBlobUrl} className="flex-1 w-full" style={{ border: 'none' }} title="Aperçu PDF" />
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center text-steel-400 gap-3">
+                    <svg className="w-12 h-12 opacity-25" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p className="text-sm">Sélectionnez des classes puis cliquez sur <span className="font-medium text-steel-600">Aperçu</span></p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-5 py-2 border-t border-steel-200 shrink-0">
+              <p className="text-xs text-steel-400">
+                {pdfSelections.length} {tab === 'class' ? 'classe(s)' : 'enseignant(s)'} sélectionné(s){pdfSelections.length > 0 ? ` · 1 page par ${tab === 'class' ? 'classe' : 'enseignant'}` : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -287,6 +472,100 @@ function AddCourseForm({ classId, subjects, config, days, onAdded }) {
             )}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function EditEntryModal({ entry, config, days, onClose, onSaved, onDeleted }) {
+  const ticks = []
+  for (let m = toMin(config.day_start); m <= toMin(config.day_end); m += 30) ticks.push(toTime(m))
+
+  const [day, setDay] = useState(entry.day_of_week)
+  const [start, setStart] = useState(entry.start_time)
+  const [end, setEnd] = useState(entry.end_time)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState(false)
+
+  async function save() {
+    if (start >= end) { setError('L\'heure de fin doit suivre le début'); return }
+    setError(''); setSaving(true)
+    try {
+      await api.put(`/api/timetable/entry/${entry.id}`, { day_of_week: day, start_time: start, end_time: end })
+      onSaved()
+    } catch (err) {
+      setError(err.response?.data?.message || 'Erreur lors de la modification')
+      setSaving(false)
+    }
+  }
+
+  const label = entry.classroom_label ? `${entry.subject_name} — ${entry.classroom_label}` : `${entry.subject_name} — ${entry.teacher_name || '—'}`
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-steel-900">Modifier le créneau</h2>
+            <p className="text-xs text-steel-500 mt-0.5 truncate max-w-[240px]">{label}</p>
+          </div>
+          <button onClick={onClose} className="text-steel-400 hover:text-steel-600 text-lg leading-none">✕</button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs text-steel-500 mb-1.5">Jour</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {days.map(d => (
+                <button key={d} type="button" onClick={() => setDay(d)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${day === d ? 'bg-brand text-white border-brand' : 'bg-white border-steel-200 text-steel-600 hover:bg-steel-50'}`}>
+                  {DAY_LABELS[d].slice(0, 3)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="block text-xs text-steel-500 mb-1">De</label>
+              <select value={start} onChange={e => setStart(e.target.value)}
+                className="w-full px-2 py-2 border border-steel-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand">
+                {ticks.slice(0, -1).map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs text-steel-500 mb-1">À</label>
+              <select value={end} onChange={e => setEnd(e.target.value)}
+                className="w-full px-2 py-2 border border-steel-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand">
+                {ticks.filter(t => t > start).map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {error && <p className="text-red-500 text-xs">{error}</p>}
+
+          <div className="flex gap-2 pt-1">
+            {!confirming ? (
+              <button onClick={() => setConfirming(true)}
+                className="px-3 py-2.5 border border-red-200 text-red-500 hover:bg-red-50 rounded-lg text-sm font-medium transition-colors">
+                Supprimer
+              </button>
+            ) : (
+              <button onClick={onDeleted}
+                className="px-3 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors">
+                Confirmer
+              </button>
+            )}
+            <button onClick={onClose} className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50 transition-colors">
+              Annuler
+            </button>
+            <button onClick={save} disabled={saving}
+              className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+              {saving ? '...' : 'Enregistrer'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

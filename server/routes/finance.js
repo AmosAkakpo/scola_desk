@@ -554,19 +554,24 @@ router.get('/salaries', requirePermission('finance.view'), (req, res) => {
   const hoursMap = {}
   monthlyHours.forEach(h => { hoursMap[h.teacher_id] = h.total_hours })
 
-  const weeklyHours = db.prepare(`
-    SELECT teacher_id,
-      SUM(CAST(substr(end_time, 1, 2) AS INTEGER) - CAST(substr(start_time, 1, 2) AS INTEGER)) as weekly
-    FROM timetable_entries
-    WHERE academic_year_id = ?
-    GROUP BY teacher_id
-  `).all(yearId)
-  const weeklyMap = {}
-  weeklyHours.forEach(w => { weeklyMap[w.teacher_id] = w.weekly })
+  const prevuesRows = db.prepare(`
+    WITH RECURSIVE days(d) AS (
+      SELECT date(? || '-01')
+      UNION ALL SELECT date(d, '+1 day') FROM days WHERE d < date(? || '-01', '+1 month', '-1 day')
+    )
+    SELECT te.teacher_id,
+      SUM(CAST(substr(te.end_time, 1, 2) AS INTEGER) - CAST(substr(te.start_time, 1, 2) AS INTEGER)) AS hours_prevues
+    FROM days
+    JOIN timetable_entries te ON te.day_of_week = CAST(strftime('%w', d) AS INTEGER)
+      AND te.academic_year_id = ?
+    WHERE CAST(strftime('%w', d) AS INTEGER) BETWEEN 1 AND 5
+    GROUP BY te.teacher_id
+  `).all(targetMonth, targetMonth, yearId)
+  const prevuesMap = {}
+  prevuesRows.forEach(r => { prevuesMap[r.teacher_id] = r.hours_prevues })
 
   const rows = teachers.map(t => {
-    const weeklyH = weeklyMap[t.id] || 0
-    const prevues = weeklyH * 4
+    const prevues = prevuesMap[t.id] || 0
     const reelles = hoursMap[t.id] || 0
     const calculated = reelles * (t.hourly_rate || 0)
     return {
@@ -600,9 +605,16 @@ router.get('/salaries/preview/:teacherId', requirePermission('finance.view'), (r
   if (!teacher) return res.status(404).json({ error: 'NOT_FOUND' })
 
   const weeklyH = db.prepare(`
-    SELECT SUM(CAST(substr(end_time, 1, 2) AS INTEGER) - CAST(substr(start_time, 1, 2) AS INTEGER)) as weekly
-    FROM timetable_entries WHERE teacher_id = ? AND academic_year_id = ?
-  `).get(teacherId, yearId)?.weekly || 0
+    WITH RECURSIVE days(d) AS (
+      SELECT date(? || '-01')
+      UNION ALL SELECT date(d, '+1 day') FROM days WHERE d < date(? || '-01', '+1 month', '-1 day')
+    )
+    SELECT SUM(CAST(substr(te.end_time, 1, 2) AS INTEGER) - CAST(substr(te.start_time, 1, 2) AS INTEGER)) AS hours_prevues
+    FROM days
+    JOIN timetable_entries te ON te.day_of_week = CAST(strftime('%w', d) AS INTEGER)
+      AND te.teacher_id = ? AND te.academic_year_id = ?
+    WHERE CAST(strftime('%w', d) AS INTEGER) BETWEEN 1 AND 5
+  `).get(targetMonth, targetMonth, teacherId, yearId)?.hours_prevues || 0
 
   const monthlyLog = db.prepare(`
     SELECT SUM(hours_credited) as total_hours,
@@ -618,7 +630,7 @@ router.get('/salaries/preview/:teacherId', requirePermission('finance.view'), (r
   return res.json({
     teacher,
     month: targetMonth,
-    hours_prevues: weeklyH * 4,
+    hours_prevues: weeklyH,
     hours_reelles: hoursReelles,
     days_present: monthlyLog?.days_present || 0,
     days_absent: monthlyLog?.days_absent || 0,

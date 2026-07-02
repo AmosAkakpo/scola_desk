@@ -196,4 +196,61 @@ router.delete('/:id/guardians/:gid', requirePermission('students.edit'), (req, r
   return res.json({ success: true })
 })
 
+// ─── GET /api/students/:id/sanctions/:semester — Get sanctions ─
+router.get('/:id/sanctions/:semester', requirePermission('students.view'), (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const enrollment = db.prepare('SELECT classroom_id FROM enrollments WHERE student_id = ? AND academic_year_id = ? AND is_deleted = 0 LIMIT 1').get(req.params.id, yearId)
+  if (!enrollment) return res.json({ sanctions: null })
+
+  const row = db.prepare(`
+    SELECT avertissement, blame, conduite_score, conduite_note, felicitation, encouragement, tableau_honneur, conseil_decision, conseil_decision_pass
+    FROM semester_decisions
+    WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?
+  `).get(req.params.id, enrollment.classroom_id, yearId, req.params.semester)
+
+  const defaultConduite = parseFloat(db.prepare("SELECT value FROM app_settings WHERE key = 'default_conduite_score'").get()?.value || '18')
+  return res.json({ sanctions: row || { avertissement: 0, blame: 0, conduite_score: null, conduite_note: null, felicitation: 0, encouragement: 0, tableau_honneur: 0, conseil_decision: null, conseil_decision_pass: null }, default_conduite: defaultConduite })
+})
+
+// ─── PUT /api/students/:id/sanctions/:semester — Save sanctions + conduite ─
+router.put('/:id/sanctions/:semester', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  const { avertissement, blame, conduite_score, conduite_note } = req.body
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const enrollment = db.prepare('SELECT classroom_id FROM enrollments WHERE student_id = ? AND academic_year_id = ? AND is_deleted = 0 LIMIT 1').get(req.params.id, yearId)
+  if (!enrollment) return res.status(400).json({ error: 'NOT_ENROLLED' })
+
+  const conduiteVal = conduite_score !== undefined && conduite_score !== null ? parseFloat(conduite_score) : null
+
+  db.prepare(`
+    INSERT INTO semester_decisions (student_id, classroom_id, academic_year_id, semester, avertissement, blame, conduite_score, conduite_note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(student_id, classroom_id, academic_year_id, semester) DO UPDATE SET
+      avertissement = excluded.avertissement,
+      blame = excluded.blame,
+      conduite_score = excluded.conduite_score,
+      conduite_note = excluded.conduite_note,
+      updated_at = datetime('now')
+  `).run(req.params.id, enrollment.classroom_id, yearId, req.params.semester, avertissement ? 1 : 0, blame ? 1 : 0, conduiteVal, conduite_note || null)
+
+  return res.json({ success: true })
+})
+
+// ─── POST /api/students/:id/expel — Expel student ────────────
+router.post('/:id/expel', requirePermission('students.edit'), (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+
+  const enrollment = db.prepare('SELECT id FROM enrollments WHERE student_id = ? AND academic_year_id = ? AND is_deleted = 0 LIMIT 1').get(req.params.id, yearId)
+  if (!enrollment) return res.status(400).json({ error: 'NOT_ENROLLED' })
+
+  db.transaction(() => {
+    db.prepare("UPDATE enrollments SET is_expelled = 1, updated_at = datetime('now') WHERE id = ?").run(enrollment.id)
+    db.prepare("UPDATE students SET status = 'excluded', updated_at = datetime('now') WHERE id = ?").run(req.params.id)
+  })()
+
+  return res.json({ success: true })
+})
+
 module.exports = router

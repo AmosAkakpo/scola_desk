@@ -25,10 +25,13 @@ router.get('/config', requirePermission('students.view'), (req, res) => {
   const get = k => db.prepare('SELECT value FROM app_settings WHERE key = ?').get(k)?.value
   let days = [1, 2, 3, 4, 5, 6]
   try { days = JSON.parse(get('timetable_days')) } catch { /* default */ }
+  const yearId = get('current_academic_year_id')
+  const yearLabel = yearId ? db.prepare('SELECT label FROM academic_years WHERE id = ?').get(yearId)?.label : null
   return res.json({
     day_start: get('timetable_day_start') || '07:00',
     day_end: get('timetable_day_end') || '19:00',
     days,
+    year_label: yearLabel || '',
   })
 })
 

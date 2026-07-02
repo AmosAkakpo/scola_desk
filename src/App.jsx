@@ -17,6 +17,7 @@ import GradesComputePage from './pages/grades/GradesComputePage'
 import TimetablePage from './pages/timetable/TimetablePage'
 import ReportCardsPage from './pages/reports/ReportCardsPage'
 import ReportCardViewPage from './pages/reports/ReportCardViewPage'
+import ReportCardBatchPage from './pages/reports/ReportCardBatchPage'
 import FinanceDashboardPage from './pages/finance/FinanceDashboardPage'
 import TuitionPage from './pages/finance/TuitionPage'
 import StudentReceiptPage from './pages/finance/StudentReceiptPage'
@@ -24,6 +25,7 @@ import SalariesPage from './pages/finance/SalariesPage'
 import ExpensesPage from './pages/finance/ExpensesPage'
 import FinanceSettingsPage from './pages/finance/FinanceSettingsPage'
 import SubscriptionPage from './pages/finance/SubscriptionPage'
+import AttendancePage from './pages/finance/AttendancePage'
 import SettingsPage from './pages/settings/SettingsPage'
 import api from './utils/api'
 import './App.css'
@@ -111,6 +113,7 @@ function ProtectedApp({ schoolInfo }) {
           <Route path="/grades/compute" element={<GradesComputePage />} />
           <Route path="/timetable" element={<TimetablePage />} />
           <Route path="/report-cards" element={<ReportCardsPage />} />
+          <Route path="/report-cards/batch" element={<ReportCardBatchPage />} />
           <Route path="/report-cards/:id" element={<ReportCardViewPage />} />
           <Route path="/finance" element={<FinanceDashboardPage />} />
           <Route path="/finance/tuition" element={<TuitionPage />} />
@@ -119,6 +122,7 @@ function ProtectedApp({ schoolInfo }) {
           <Route path="/finance/expenses" element={<ExpensesPage />} />
           <Route path="/finance/settings" element={<FinanceSettingsPage />} />
           <Route path="/finance/subscription" element={<SubscriptionPage />} />
+          <Route path="/finance/attendance" element={<AttendancePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>

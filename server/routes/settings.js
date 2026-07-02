@@ -32,6 +32,21 @@ router.get('/', requirePermission('students.view'), (req, res) => {
   let schoolSections = []
   try { schoolSections = JSON.parse(settings.school_section_config || '[]') } catch {}
 
+  let congratulationsConfig = { avg_floor: 10, felicitation_percentile: 20, tableau_top_n: 5 }
+  try { const c = JSON.parse(settings.congratulations_config || ''); if (c && typeof c === 'object') congratulationsConfig = c } catch {}
+
+  const defaultConseilRanges = [
+    { min: 16, max: 20, text: 'Très Bien — Admis au trimestre suivant', pass: true },
+    { min: 14, max: 15.99, text: 'Bien — Admis au trimestre suivant', pass: true },
+    { min: 12, max: 13.99, text: 'Assez Bien — Admis au trimestre suivant', pass: true },
+    { min: 10, max: 11.99, text: 'Passable — Admis au trimestre suivant', pass: true },
+    { min: 8, max: 9.99, text: 'Insuffisant — Avertissement de passage', pass: false },
+    { min: 0, max: 7.99, text: 'Très Insuffisant — Non admis', pass: false },
+  ]
+  let conseilDecisionRanges = []
+  try { conseilDecisionRanges = JSON.parse(settings.conseil_decision_ranges || '[]') } catch {}
+  if (conseilDecisionRanges.length === 0) conseilDecisionRanges = defaultConseilRanges
+
   const logoPath = settings.school_logo_path || null
   let logoExists = false
   if (logoPath) {
@@ -45,6 +60,9 @@ router.get('/', requirePermission('students.view'), (req, res) => {
     school_logo_path: logoExists ? logoPath : null,
     total_rooms: settings.total_rooms || '',
     matricule_mode: settings.matricule_mode || 'custom',
+    congratulations_config: congratulationsConfig,
+    conseil_decision_ranges: conseilDecisionRanges,
+    default_conduite_score: parseFloat(settings.default_conduite_score || '18'),
   })
 })
 
@@ -64,6 +82,42 @@ router.put('/school-sections', requirePermission('students.edit'), (req, res) =>
   const db = getDb()
   db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('school_section_config', ?, datetime('now'))").run(JSON.stringify(sections))
   return res.json({ success: true })
+})
+
+// ─── PUT /api/settings/default-conduite ──────────────────────
+router.put('/default-conduite', requirePermission('students.edit'), (req, res) => {
+  const score = parseFloat(req.body.score)
+  if (isNaN(score) || score < 0 || score > 20) return res.status(400).json({ error: 'INVALID' })
+  const db = getDb()
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('default_conduite_score', ?, datetime('now'))").run(String(score))
+  return res.json({ success: true })
+})
+
+// ─── PUT /api/settings/congratulations-config ────────────────
+router.put('/congratulations-config', requirePermission('students.edit'), (req, res) => {
+  const { avg_floor, felicitation_percentile, tableau_top_n } = req.body
+  const db = getDb()
+  const cfg = { avg_floor: parseFloat(avg_floor) || 10, felicitation_percentile: parseInt(felicitation_percentile) || 20, tableau_top_n: parseInt(tableau_top_n) || 5 }
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('congratulations_config', ?, datetime('now'))").run(JSON.stringify(cfg))
+  return res.json({ success: true })
+})
+
+// ─── PUT /api/settings/conseil-decision-ranges ───────────────
+router.put('/conseil-decision-ranges', requirePermission('students.edit'), (req, res) => {
+  const { ranges } = req.body
+  if (!Array.isArray(ranges)) return res.status(400).json({ error: 'INVALID' })
+  const db = getDb()
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('conseil_decision_ranges', ?, datetime('now'))").run(JSON.stringify(ranges))
+  return res.json({ success: true })
+})
+
+// ─── GET /api/settings/benin-flag — Serve bundled flag image ─
+router.get('/benin-flag', (req, res) => {
+  const flagPath = path.join(__dirname, '../../testing/drapeau_benin.png')
+  if (!fs.existsSync(flagPath)) return res.status(404).end()
+  res.setHeader('Content-Type', 'image/png')
+  res.setHeader('Cache-Control', 'public, max-age=86400')
+  fs.createReadStream(flagPath).pipe(res)
 })
 
 // ─── POST /api/settings/school-logo — Upload logo ───────────

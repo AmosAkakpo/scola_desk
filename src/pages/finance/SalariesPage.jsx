@@ -69,41 +69,55 @@ export default function SalariesPage() {
             <thead>
               <tr className="border-b border-steel-200 bg-steel-50">
                 <th className="text-left px-4 py-2.5 text-steel-500 font-medium">Enseignant</th>
-                <th className="text-left px-4 py-2.5 text-steel-500 font-medium">Matricule</th>
-                <th className="text-right px-4 py-2.5 text-steel-500 font-medium">Montant</th>
+                <th className="text-right px-4 py-2.5 text-steel-500 font-medium">H. prévues</th>
+                <th className="text-right px-4 py-2.5 text-steel-500 font-medium">H. réelles</th>
+                <th className="text-right px-4 py-2.5 text-steel-500 font-medium">Calculé</th>
+                <th className="text-right px-4 py-2.5 text-steel-500 font-medium">Versé</th>
                 <th className="text-center px-4 py-2.5 text-steel-500 font-medium">Statut</th>
-                <th className="text-center px-4 py-2.5 text-steel-500 font-medium w-28"></th>
+                <th className="text-center px-4 py-2.5 text-steel-500 font-medium w-24"></th>
               </tr>
             </thead>
             <tbody>
-              {teachers.map(t => (
-                <tr key={t.id} className="border-b border-steel-50">
-                  <td className="px-4 py-2.5 text-steel-800 font-medium">{t.full_name}</td>
-                  <td className="px-4 py-2.5 text-steel-500 font-mono text-xs">{t.matricule || '—'}</td>
-                  <td className="px-4 py-2.5 text-right text-steel-800">{t.entry ? formatXOF(t.entry.amount) : '—'}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {t.entry?.is_paid ? (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-brand-50 text-brand-600">Payé</span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-steel-100 text-steel-500">Non payé</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    {!t.entry?.is_paid && (
-                      <button onClick={() => setShowPay(t)} className="px-2.5 py-1 bg-brand hover:bg-brand-600 text-white rounded text-xs font-medium transition-colors">
-                        Payer
-                      </button>
-                    )}
-                    {t.entry?.is_paid && t.entry.receipt_number && (
-                      <button onClick={() => printSalaryReceipt(t.entry.id)} className="px-2.5 py-1 border border-steel-200 text-steel-600 hover:bg-steel-50 rounded text-xs font-medium transition-colors">
-                        Reçu
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {teachers.map(t => {
+                const taux = t.hours_prevues > 0 ? Math.round((t.hours_reelles / t.hours_prevues) * 100) : null
+                return (
+                  <tr key={t.id} className="border-b border-steel-50">
+                    <td className="px-4 py-2.5">
+                      <p className="text-steel-800 font-medium">{t.full_name}</p>
+                      {t.matricule && <p className="text-[10px] text-steel-400 font-mono">{t.matricule}</p>}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-steel-500 text-xs">{t.hours_prevues > 0 ? `${t.hours_prevues}h` : '—'}</td>
+                    <td className="px-4 py-2.5 text-right text-xs">
+                      {t.hours_reelles > 0 ? (
+                        <span className={taux !== null && taux < 80 ? 'text-orange-600 font-medium' : 'text-steel-700'}>{t.hours_reelles}h</span>
+                      ) : <span className="text-steel-300">0h</span>}
+                      {taux !== null && <span className="text-steel-400 ml-1">({taux}%)</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-steel-700">{t.calculated_amount > 0 ? formatXOF(t.calculated_amount) : '—'}</td>
+                    <td className="px-4 py-2.5 text-right text-steel-800">{t.entry?.is_paid ? formatXOF(t.entry.amount) : '—'}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {t.entry?.is_paid ? (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-brand-50 text-brand-600">Payé</span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-steel-100 text-steel-500">En attente</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      {!t.entry?.is_paid ? (
+                        <button onClick={() => setShowPay(t)} className="px-2.5 py-1 bg-brand hover:bg-brand-600 text-white rounded text-xs font-medium transition-colors">
+                          Payer
+                        </button>
+                      ) : t.entry.receipt_number ? (
+                        <button onClick={() => printSalaryReceipt(t.entry.id)} className="px-2.5 py-1 border border-steel-200 text-steel-600 hover:bg-steel-50 rounded text-xs font-medium transition-colors">
+                          Reçu
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                )
+              })}
               {teachers.length === 0 && (
-                <tr><td colSpan="5" className="px-4 py-8 text-center text-steel-400 text-sm">Aucun enseignant actif</td></tr>
+                <tr><td colSpan="7" className="px-4 py-8 text-center text-steel-400 text-sm">Aucun enseignant actif</td></tr>
               )}
             </tbody>
           </table>
@@ -152,23 +166,44 @@ h1{font-size:16px;text-align:center;margin:0 0 4px}.sub{text-align:center;font-s
 }
 
 function PaySalaryModal({ teacher, month, onClose, onPaid }) {
+  const [preview, setPreview] = useState(null)
   const [amount, setAmount] = useState('')
+  const [adjustmentReason, setAdjustmentReason] = useState('')
   const [method, setMethod] = useState('especes')
   const [payerName, setPayerName] = useState('')
   const [reference, setReference] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
+  useEffect(() => {
+    api.get(`/api/finance/salaries/preview/${teacher.id}?pay_period=${month}`).then(res => {
+      setPreview(res.data)
+      setAmount(String(Math.round(res.data.calculated_amount || 0)))
+    }).catch(() => {})
+  }, [teacher.id, month])
+
+  const calculatedAmount = preview?.calculated_amount || 0
+  const currentAmount = parseFloat(amount) || 0
+  const isAdjusted = calculatedAmount > 0 && Math.abs(currentAmount - calculatedAmount) > 0.01
+
   async function handleSubmit(e) {
     e.preventDefault()
-    const num = parseFloat(amount)
-    if (!num || num <= 0) return
-    setSaving(true)
-    setError('')
+    if (!currentAmount || currentAmount <= 0) return
+    if (isAdjusted && !adjustmentReason.trim()) {
+      setError('Un motif est requis si le montant diffère du calculé')
+      return
+    }
+    setSaving(true); setError('')
     try {
       await api.post('/api/finance/salaries/pay', {
-        teacher_id: teacher.id, month, amount: num, salary_type: 'fixed',
-        payment_method: method, payer_name: payerName || null, reference: reference || null,
+        teacher_id: teacher.id,
+        pay_period: month,
+        amount: currentAmount,
+        calculated_amount: calculatedAmount,
+        adjustment_reason: isAdjusted ? adjustmentReason.trim() : null,
+        payment_method: method,
+        payer_name: payerName || null,
+        reference: reference || null,
       })
       onPaid()
     } catch (err) {
@@ -181,15 +216,48 @@ function PaySalaryModal({ teacher, month, onClose, onPaid }) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
         <div className="p-5 border-b border-steel-200">
-          <h2 className="text-lg font-medium text-steel-900">Payer {teacher.full_name}</h2>
-          <p className="text-xs text-steel-500">{month}</p>
+          <h2 className="text-base font-medium text-steel-900">Payer {teacher.full_name}</h2>
+          <p className="text-xs text-steel-500 mt-0.5">{month}</p>
         </div>
+
+        {preview && (
+          <div className="px-5 pt-4 pb-0">
+            <div className="bg-steel-50 rounded-lg p-3 grid grid-cols-3 gap-3 text-center text-xs mb-4">
+              <div>
+                <p className="text-steel-400 mb-0.5">H. prévues</p>
+                <p className="font-semibold text-steel-700">{preview.hours_prevues}h</p>
+              </div>
+              <div>
+                <p className="text-steel-400 mb-0.5">H. réelles</p>
+                <p className={`font-semibold ${preview.hours_reelles < preview.hours_prevues * 0.8 ? 'text-orange-600' : 'text-steel-700'}`}>{preview.hours_reelles}h</p>
+              </div>
+              <div>
+                <p className="text-steel-400 mb-0.5">Calculé</p>
+                <p className="font-semibold text-brand">{formatXOF(calculatedAmount)}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="p-5 space-y-3">
           <div>
-            <label className="block text-xs text-steel-500 mb-1">Montant *</label>
-            <input type="number" min="1" required value={amount} onChange={e => setAmount(e.target.value)}
-              className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
+            <label className="block text-xs text-steel-500 mb-1">Montant à verser *</label>
+            <input type="number" min="1" required value={amount} onChange={e => { setAmount(e.target.value); setError('') }}
+              className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:border-brand ${isAdjusted ? 'border-orange-300 bg-orange-50' : 'border-steel-200'}`} />
+            {isAdjusted && (
+              <p className="text-xs text-orange-600 mt-1">Diffère du montant calculé — un motif est requis</p>
+            )}
           </div>
+
+          {isAdjusted && (
+            <div>
+              <label className="block text-xs text-steel-500 mb-1">Motif de l'ajustement *</label>
+              <input type="text" value={adjustmentReason} onChange={e => setAdjustmentReason(e.target.value)}
+                className="w-full px-3 py-2 border border-orange-300 rounded-lg text-sm focus:outline-none focus:border-brand"
+                placeholder="Ex: prime, avance déduite…" />
+            </div>
+          )}
+
           <div>
             <label className="block text-xs text-steel-500 mb-1">Mode de paiement</label>
             <select value={method} onChange={e => setMethod(e.target.value)}
@@ -197,6 +265,7 @@ function PaySalaryModal({ teacher, month, onClose, onPaid }) {
               {METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-steel-500 mb-1">Nom du payeur</label>
@@ -209,11 +278,13 @@ function PaySalaryModal({ teacher, month, onClose, onPaid }) {
                 className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand" />
             </div>
           </div>
+
           {error && <p className="text-red-500 text-xs">{error}</p>}
-          <div className="flex gap-3 pt-2">
+
+          <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose} className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50 transition-colors">Annuler</button>
-            <button type="submit" disabled={saving} className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
-              {saving ? 'Enregistrement...' : 'Payer'}
+            <button type="submit" disabled={saving || !preview} className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+              {saving ? 'Enregistrement...' : 'Verser'}
             </button>
           </div>
         </form>

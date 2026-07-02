@@ -38,7 +38,7 @@ export default function TeacherDetailPage() {
   if (!teacher) return <p className="text-steel-500 py-20 text-center">Enseignant introuvable</p>
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div>
         <button onClick={() => navigate('/teachers')} className="text-xs text-steel-400 hover:text-steel-600 mb-2 flex items-center gap-1">

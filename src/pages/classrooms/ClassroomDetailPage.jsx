@@ -7,11 +7,11 @@ export default function ClassroomDetailPage() {
   const navigate = useNavigate()
   const [classroom, setClassroom] = useState(null)
   const [students, setStudents] = useState([])
-  const [teachers, setTeachers] = useState([])
   const [allClassrooms, setAllClassrooms] = useState([])
   const [subjects, setSubjects] = useState([])
   const [teacherList, setTeacherList] = useState([])
   const [savingSubject, setSavingSubject] = useState(null)
+  const [pendingAssignment, setPendingAssignment] = useState(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('students')
   const [selected, setSelected] = useState([])
@@ -27,7 +27,6 @@ export default function ClassroomDetailPage() {
     ])
     setClassroom(detailRes.data.classroom)
     setStudents(detailRes.data.students || [])
-    setTeachers(detailRes.data.teachers || [])
     setAllClassrooms((listRes.data.classrooms || []).filter(c => c.id !== parseInt(id)))
     setSubjects(assignRes.data.subjects || [])
     setTeacherList(assignRes.data.teachers || [])
@@ -76,7 +75,7 @@ export default function ClassroomDetailPage() {
   if (!classroom) return <p className="text-steel-500 py-20 text-center">Classe introuvable</p>
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       {/* Header */}
       <div>
         <button onClick={() => navigate('/classrooms')} className="text-xs text-steel-400 hover:text-steel-600 mb-2 flex items-center gap-1">
@@ -119,7 +118,6 @@ export default function ClassroomDetailPage() {
         {[
           { key: 'students', label: `Élèves (${students.length})` },
           { key: 'subjects', label: `Matières (${subjects.length})` },
-          { key: 'teachers', label: `Enseignants (${teachers.length})` },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === t.key ? 'border-brand text-brand' : 'border-transparent text-steel-500 hover:text-steel-700'}`}>
@@ -178,7 +176,7 @@ export default function ClassroomDetailPage() {
         </div>
       )}
 
-      {/* Subjects Tab — assign a teacher per subject */}
+      {/* Subjects Tab — coefficient + assign teacher with confirmation */}
       {tab === 'subjects' && (
         <div className="bg-white rounded-xl border border-steel-200 overflow-hidden">
           {subjects.length === 0 ? (
@@ -188,17 +186,32 @@ export default function ClassroomDetailPage() {
               <thead>
                 <tr className="border-b border-steel-200 bg-steel-50">
                   <th className="text-left px-4 py-3 text-steel-500 font-medium">Matière</th>
-                  <th className="text-left px-4 py-3 text-steel-500 font-medium">Enseignant</th>
+                  <th className="text-center px-4 py-3 text-steel-500 font-medium w-20">Coef.</th>
+                  <th className="text-left px-4 py-3 text-steel-500 font-medium">Enseignant assigné</th>
                 </tr>
               </thead>
               <tbody>
                 {subjects.map(s => (
                   <tr key={s.subject_id} className="border-b border-steel-100">
-                    <td className="px-4 py-3 text-steel-800">{s.subject_name}</td>
+                    <td className="px-4 py-3 text-steel-800 font-medium">{s.subject_name}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className="px-2 py-0.5 bg-steel-100 text-steel-600 rounded text-xs font-medium">{s.coefficient ?? '—'}</span>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <select value={s.teacher_id || ''} onChange={e => assignTeacher(s.subject_id, e.target.value ? parseInt(e.target.value) : null)}
+                        <select
+                          value={s.teacher_id || ''}
                           disabled={savingSubject === s.subject_id}
+                          onChange={e => {
+                            const newId = e.target.value ? parseInt(e.target.value) : null
+                            const teacher = teacherList.find(t => t.id === newId)
+                            setPendingAssignment({
+                              subject_id: s.subject_id,
+                              subject_name: s.subject_name,
+                              teacher_id: newId,
+                              teacher_name: teacher?.full_name || null,
+                            })
+                          }}
                           className="px-3 py-1.5 border border-steel-200 rounded-lg text-sm bg-white focus:outline-none focus:border-brand disabled:opacity-50 min-w-[220px]">
                           <option value="">— Non assigné —</option>
                           {teacherList.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}
@@ -214,29 +227,41 @@ export default function ClassroomDetailPage() {
         </div>
       )}
 
-      {/* Teachers Tab */}
-      {tab === 'teachers' && (
-        <div className="bg-white rounded-xl border border-steel-200 overflow-hidden">
-          {teachers.length === 0 ? (
-            <p className="px-4 py-8 text-center text-steel-400 text-sm">Aucun enseignant assigné</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-steel-200 bg-steel-50">
-                  <th className="text-left px-4 py-3 text-steel-500 font-medium">Matière</th>
-                  <th className="text-left px-4 py-3 text-steel-500 font-medium">Enseignant</th>
-                </tr>
-              </thead>
-              <tbody>
-                {teachers.map((t, i) => (
-                  <tr key={i} className="border-b border-steel-100">
-                    <td className="px-4 py-3 text-steel-800">{t.subject_name}</td>
-                    <td className="px-4 py-3 text-steel-600">{t.teacher_name}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+      {pendingAssignment && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-semibold text-steel-900 mb-1">Confirmer l'assignation</h2>
+            <p className="text-sm text-steel-500 mb-4">Veuillez confirmer la modification avant d'enregistrer.</p>
+            <div className="bg-steel-50 rounded-lg p-4 space-y-2 mb-5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-steel-500">Matière</span>
+                <span className="font-medium text-steel-800">{pendingAssignment.subject_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-steel-500">Classe</span>
+                <span className="font-medium text-steel-800">{classroom.label}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-steel-500">Enseignant</span>
+                <span className={`font-medium ${pendingAssignment.teacher_name ? 'text-brand' : 'text-steel-400 italic'}`}>
+                  {pendingAssignment.teacher_name || 'Non assigné'}
+                </span>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setPendingAssignment(null); fetchData() }}
+                className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">
+                Annuler
+              </button>
+              <button onClick={async () => {
+                const p = pendingAssignment
+                setPendingAssignment(null)
+                await assignTeacher(p.subject_id, p.teacher_id)
+              }} className="flex-1 py-2.5 bg-brand hover:bg-brand-600 text-white rounded-lg text-sm font-medium">
+                Confirmer
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

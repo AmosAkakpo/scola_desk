@@ -5,6 +5,9 @@ export default function SettingsPage() {
   const [logo, setLogo] = useState(null)
   const [scale, setScale] = useState([])
   const [sections, setSections] = useState([])
+  const [congCfg, setCongCfg] = useState({ avg_floor: 10, felicitation_percentile: 20, tableau_top_n: 5 })
+  const [conseilRanges, setConseilRanges] = useState([])
+  const [defaultConduite, setDefaultConduite] = useState(18)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState({})
   const [msg, setMsg] = useState('')
@@ -14,6 +17,9 @@ export default function SettingsPage() {
       setScale(res.data.appreciation_scale || [])
       setSections(res.data.school_sections || [])
       setLogo(res.data.school_logo_path)
+      setCongCfg(res.data.congratulations_config || { avg_floor: 10, felicitation_percentile: 20, tableau_top_n: 5 })
+      setConseilRanges(res.data.conseil_decision_ranges || [])
+      setDefaultConduite(res.data.default_conduite_score ?? 18)
       setLoading(false)
     })
   }, [])
@@ -74,6 +80,39 @@ export default function SettingsPage() {
     await api.put('/api/settings/school-sections', { sections })
     setSaving(p => ({ ...p, sections: false }))
     showMsg('Sections enregistrées')
+  }
+
+  // ─── Default Conduite ──────────────────────────────────────
+  async function saveDefaultConduite() {
+    setSaving(p => ({ ...p, conduite: true }))
+    await api.put('/api/settings/default-conduite', { score: defaultConduite })
+    setSaving(p => ({ ...p, conduite: false }))
+    showMsg('Conduite par défaut enregistrée')
+  }
+
+  // ─── Congratulations Config ────────────────────────────────
+  async function saveCongCfg() {
+    setSaving(p => ({ ...p, cong: true }))
+    await api.put('/api/settings/congratulations-config', congCfg)
+    setSaving(p => ({ ...p, cong: false }))
+    showMsg('Félicitations enregistrées')
+  }
+
+  // ─── Conseil Decision Ranges ───────────────────────────────
+  function updateConseilRange(i, field, value) {
+    setConseilRanges(prev => prev.map((r, idx) => idx === i ? { ...r, [field]: field === 'text' ? value : field === 'pass' ? value : parseFloat(value) || 0 } : r))
+  }
+  function addConseilRange() {
+    setConseilRanges(prev => [...prev, { min: 0, max: 0, text: '', pass: true }])
+  }
+  function removeConseilRange(i) {
+    setConseilRanges(prev => prev.filter((_, idx) => idx !== i))
+  }
+  async function saveConseilRanges() {
+    setSaving(p => ({ ...p, conseil: true }))
+    await api.put('/api/settings/conseil-decision-ranges', { ranges: conseilRanges })
+    setSaving(p => ({ ...p, conseil: false }))
+    showMsg('Décisions enregistrées')
   }
 
   if (loading) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin" /></div>
@@ -187,6 +226,109 @@ export default function SettingsPage() {
         <button onClick={addSection}
           className="mt-2 w-full py-2 border border-dashed border-steel-300 rounded-lg text-xs text-steel-500 hover:border-brand hover:text-brand transition-colors">
           + Ajouter une section
+        </button>
+      </section>
+
+      {/* Default Conduite */}
+      <section className="bg-white rounded-xl border border-steel-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xs font-semibold text-steel-400 uppercase tracking-wide">Conduite par défaut</h2>
+            <p className="text-xs text-steel-500 mt-1">Note de conduite affichée sur les bulletins si non modifiée. Modifiable par élève dans la fiche élève.</p>
+          </div>
+          <button onClick={saveDefaultConduite} disabled={saving.conduite}
+            className="px-3 py-1.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors">
+            {saving.conduite ? 'Enregistrement...' : 'Enregistrer'}
+          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          <input type="number" min="0" max="20" step="0.5" value={defaultConduite}
+            onChange={e => setDefaultConduite(parseFloat(e.target.value) || 0)}
+            className="w-24 px-3 py-1.5 border border-steel-200 rounded-lg text-sm text-center focus:outline-none focus:border-brand" />
+          <span className="text-sm text-steel-500">/ 20</span>
+        </div>
+      </section>
+
+      {/* Congratulations Config */}
+      <section className="bg-white rounded-xl border border-steel-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xs font-semibold text-steel-400 uppercase tracking-wide">Félicitations — Seuils</h2>
+            <p className="text-xs text-steel-500 mt-1">Calculées automatiquement à la génération des bulletins.</p>
+          </div>
+          <button onClick={saveCongCfg} disabled={saving.cong}
+            className="px-3 py-1.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors">
+            {saving.cong ? 'Enregistrement...' : 'Enregistrer'}
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs text-steel-500 mb-1">Moyenne minimale (plancher)</label>
+            <input type="number" step="0.5" value={congCfg.avg_floor} onChange={e => setCongCfg(p => ({ ...p, avg_floor: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+            <p className="text-xs text-steel-400 mt-1">En dessous → aucune félicitation</p>
+          </div>
+          <div>
+            <label className="block text-xs text-steel-500 mb-1">Félicitation — top X% de la classe</label>
+            <input type="number" step="1" min="1" max="100" value={congCfg.felicitation_percentile} onChange={e => setCongCfg(p => ({ ...p, felicitation_percentile: parseInt(e.target.value) || 20 }))}
+              className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+            <p className="text-xs text-steel-400 mt-1">Ex: 20 = top 20% + moy ≥ plancher</p>
+          </div>
+          <div>
+            <label className="block text-xs text-steel-500 mb-1">Tableau d'honneur — top N élèves</label>
+            <input type="number" step="1" min="1" value={congCfg.tableau_top_n} onChange={e => setCongCfg(p => ({ ...p, tableau_top_n: parseInt(e.target.value) || 5 }))}
+              className="w-full px-3 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+            <p className="text-xs text-steel-400 mt-1">Ex: 5 = rang ≤ 5 + moy ≥ plancher</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Conseil Decision Ranges */}
+      <section className="bg-white rounded-xl border border-steel-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xs font-semibold text-steel-400 uppercase tracking-wide">Décision du conseil des professeurs</h2>
+            <p className="text-xs text-steel-500 mt-1">Texte affiché sur le bulletin selon la moyenne. Calculé automatiquement.</p>
+          </div>
+          <button onClick={saveConseilRanges} disabled={saving.conseil}
+            className="px-3 py-1.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors">
+            {saving.conseil ? 'Enregistrement...' : 'Enregistrer'}
+          </button>
+        </div>
+        <div className="space-y-2">
+          <div className="grid grid-cols-12 gap-2 mb-1">
+            <span className="col-span-2 text-xs text-steel-400 text-center">Min</span>
+            <span className="col-span-2 text-xs text-steel-400 text-center">Max</span>
+            <span className="col-span-5 text-xs text-steel-400">Texte affiché</span>
+            <span className="col-span-2 text-xs text-steel-400 text-center">Admis</span>
+          </div>
+          {conseilRanges.map((r, i) => (
+            <div key={i} className="grid grid-cols-12 gap-2 items-center">
+              <div className="col-span-2">
+                <input type="number" step="0.01" value={r.min} onChange={e => updateConseilRange(i, 'min', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs text-center focus:outline-none focus:border-brand" />
+              </div>
+              <div className="col-span-2">
+                <input type="number" step="0.01" value={r.max} onChange={e => updateConseilRange(i, 'max', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs text-center focus:outline-none focus:border-brand" />
+              </div>
+              <div className="col-span-5">
+                <input type="text" value={r.text} onChange={e => updateConseilRange(i, 'text', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-steel-200 rounded-lg text-xs focus:outline-none focus:border-brand" />
+              </div>
+              <div className="col-span-2 flex justify-center">
+                <button onClick={() => updateConseilRange(i, 'pass', !r.pass)}
+                  className={`w-8 h-5 rounded-full transition-colors relative ${r.pass ? 'bg-brand' : 'bg-steel-300'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${r.pass ? 'left-3.5' : 'left-0.5'}`} />
+                </button>
+              </div>
+              <button onClick={() => removeConseilRange(i)} className="text-red-400 hover:text-red-500 text-xs">✕</button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addConseilRange}
+          className="mt-2 w-full py-2 border border-dashed border-steel-300 rounded-lg text-xs text-steel-500 hover:border-brand hover:text-brand transition-colors">
+          + Ajouter un palier
         </button>
       </section>
 

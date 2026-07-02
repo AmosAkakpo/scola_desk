@@ -66,8 +66,37 @@ router.post('/generate', requirePermission('reports.edit'), (req, res) => {
   studentQuery += ' ORDER BY s.full_name'
   const students = db.prepare(studentQuery).all(...studentParams)
 
-  const classSize = db.prepare('SELECT COUNT(*) as cnt FROM enrollments WHERE classroom_id = ? AND is_deleted = 0').get(classroom_id)?.cnt || 0
+  const classSize = db.prepare('SELECT COUNT(*) as cnt FROM enrollments WHERE classroom_id = ? AND is_deleted = 0 AND is_expelled = 0').get(classroom_id)?.cnt || 0
   const periodeCount = parseInt(db.prepare("SELECT value FROM app_settings WHERE key = 'periode_count'").get()?.value || '3')
+
+  // Load configs for auto-compute (once per generate call)
+  let congCfg = { avg_floor: 10, felicitation_percentile: 20, tableau_top_n: 5 }
+  try { const c = JSON.parse(db.prepare("SELECT value FROM app_settings WHERE key = 'congratulations_config'").get()?.value || ''); if (c) congCfg = c } catch {}
+
+  const defaultRanges = [
+    { min: 16, max: 20, text: 'Très Bien — Admis au trimestre suivant', pass: true },
+    { min: 14, max: 15.99, text: 'Bien — Admis au trimestre suivant', pass: true },
+    { min: 12, max: 13.99, text: 'Assez Bien — Admis au trimestre suivant', pass: true },
+    { min: 10, max: 11.99, text: 'Passable — Admis au trimestre suivant', pass: true },
+    { min: 8, max: 9.99, text: 'Insuffisant — Avertissement de passage', pass: false },
+    { min: 0, max: 7.99, text: 'Très Insuffisant — Non admis', pass: false },
+  ]
+  let conseilRanges = defaultRanges
+  try { const r = JSON.parse(db.prepare("SELECT value FROM app_settings WHERE key = 'conseil_decision_ranges'").get()?.value || '[]'); if (r.length) conseilRanges = r } catch {}
+
+  const defaultConduite = parseFloat(db.prepare("SELECT value FROM app_settings WHERE key = 'default_conduite_score'").get()?.value || '18')
+
+  const defaultAppScale = [
+    { min: 16, max: 20, label: 'Très Bien' }, { min: 14, max: 15.99, label: 'Bien' },
+    { min: 12, max: 13.99, label: 'Assez Bien' }, { min: 10, max: 11.99, label: 'Passable' },
+    { min: 8, max: 9.99, label: 'Médiocre' }, { min: 0, max: 7.99, label: 'Faible' },
+  ]
+  let appScale = defaultAppScale
+  try { const s = JSON.parse(db.prepare("SELECT value FROM app_settings WHERE key = 'appreciation_scale'").get()?.value || '[]'); if (s.length) appScale = s } catch {}
+  function getAppreciation(avg) {
+    if (avg === null || avg === undefined) return null
+    return appScale.find(s => avg >= s.min && avg <= s.max)?.label || null
+  }
 
   let generated = 0
 
@@ -79,14 +108,51 @@ router.post('/generate', requirePermission('reports.edit'), (req, res) => {
     }
 
     for (const student of students) {
-      // Subject averages
-      const subjectAvgs = db.prepare(`
+      // All subjects for the classroom (always show even without grades)
+      const allSubjects = classroom.serie_id
+        ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name, s.short_code, ls.coefficient
+             FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+             WHERE ls.level_id = ? AND ls.is_active = 1 AND (ls.serie_id = ? OR ls.serie_id IS NULL)
+             ORDER BY s.name`).all(classroom.level_id, classroom.serie_id)
+        : db.prepare(`SELECT ls.subject_id, s.name AS subject_name, s.short_code, ls.coefficient
+             FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+             WHERE ls.level_id = ? AND ls.is_active = 1 AND ls.serie_id IS NULL
+             ORDER BY s.name`).all(classroom.level_id)
+
+      // Subject averages (only exist if computed)
+      const computedAvgs = db.prepare(`
         SELECT sa.*, sub.name AS subject_name, sub.short_code
         FROM subject_averages sa
         JOIN subjects sub ON sub.id = sa.subject_id
         WHERE sa.student_id = ? AND sa.classroom_id = ? AND sa.academic_year_id = ? AND sa.semester = ?
-        ORDER BY sub.name
       `).all(student.id, classroom_id, yearId, semester)
+      const avgBySubject = {}
+      for (const a of computedAvgs) avgBySubject[a.subject_id] = a
+
+      // Individual assessment scores for this student (one query for all subjects)
+      const allScoreRows = db.prepare(`
+        SELECT at.subject_id, at.assessment_type, at.sequence_number, at.max_score,
+               acs.score, acs.is_absent
+        FROM assessment_templates at
+        LEFT JOIN assessment_scores acs ON acs.template_id = at.id AND acs.student_id = ? AND acs.is_deleted = 0
+        WHERE at.classroom_id = ? AND at.academic_year_id = ? AND at.semester = ?
+        ORDER BY at.subject_id, at.assessment_type, at.sequence_number
+      `).all(student.id, classroom_id, yearId, semester)
+      const scoresBySubject = {}
+      for (const row of allScoreRows) {
+        if (!scoresBySubject[row.subject_id]) scoresBySubject[row.subject_id] = { interrogation: [], devoir: [], composition: [] }
+        const bucket = scoresBySubject[row.subject_id][row.assessment_type]
+        if (bucket) bucket.push({ seq: row.sequence_number, score: row.score, is_absent: row.is_absent, max_score: row.max_score })
+      }
+
+      const subjectAvgs = allSubjects.map(sub => {
+        const a = avgBySubject[sub.subject_id]
+        return a ? { ...a } : {
+          subject_id: sub.subject_id, subject_name: sub.subject_name, short_code: sub.short_code,
+          coefficient: sub.coefficient, raw_average: null, weighted_average: null,
+          subject_rank: null, class_highest_score: null, class_lowest_score: null, class_subject_average: null,
+        }
+      })
 
       // Semester summary
       const summary = db.prepare(`
@@ -94,7 +160,38 @@ router.post('/generate', requirePermission('reports.edit'), (req, res) => {
         WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?
       `).get(student.id, classroom_id, yearId, semester)
 
-      // Decisions
+      // Auto-compute congratulations from rank + average
+      const avg = summary?.semester_average ?? null
+      const rank = summary?.class_rank ?? null
+      const floor = congCfg.avg_floor ?? 10
+      const percentileN = Math.max(1, Math.ceil(classSize * ((congCfg.felicitation_percentile ?? 20) / 100)))
+      const topN = congCfg.tableau_top_n ?? 5
+      const qualifies = avg !== null && avg >= floor
+      const encouragement = qualifies ? 1 : 0
+      const felicitation = qualifies && rank !== null && rank <= percentileN ? 1 : 0
+      const tableauHonneur = qualifies && rank !== null && rank <= topN ? 1 : 0
+
+      // Auto-compute conseil decision from average
+      let conseilText = null, conseilPass = null
+      if (avg !== null) {
+        const match = conseilRanges.find(r => avg >= r.min && avg <= r.max)
+        if (match) { conseilText = match.text; conseilPass = match.pass ? 1 : 0 }
+      }
+
+      // Upsert auto-computed fields — preserve manual sanctions (avertissement, blame)
+      db.prepare(`
+        INSERT INTO semester_decisions (student_id, classroom_id, academic_year_id, semester, felicitation, encouragement, tableau_honneur, conseil_decision, conseil_decision_pass)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(student_id, classroom_id, academic_year_id, semester) DO UPDATE SET
+          felicitation = excluded.felicitation,
+          encouragement = excluded.encouragement,
+          tableau_honneur = excluded.tableau_honneur,
+          conseil_decision = excluded.conseil_decision,
+          conseil_decision_pass = excluded.conseil_decision_pass,
+          updated_at = datetime('now')
+      `).run(student.id, classroom_id, yearId, semester, felicitation, encouragement, tableauHonneur, conseilText, conseilPass)
+
+      // Fetch full decision row (includes manually set sanctions)
       const decision = db.prepare(`
         SELECT * FROM semester_decisions
         WHERE student_id = ? AND classroom_id = ? AND academic_year_id = ? AND semester = ?
@@ -136,17 +233,28 @@ router.post('/generate', requirePermission('reports.edit'), (req, res) => {
           matricule: student.matricule,
           gender: student.gender,
         },
-        subjects: subjectAvgs.map(sa => ({
-          name: sa.subject_name,
-          short_code: sa.short_code,
-          raw_average: sa.raw_average,
-          coefficient: sa.coefficient,
-          weighted_average: sa.weighted_average,
-          rank: sa.subject_rank,
-          class_highest: sa.class_highest_score,
-          class_lowest: sa.class_lowest_score,
-          class_average: sa.class_subject_average,
-        })),
+        subjects: subjectAvgs.map(sa => {
+          const ss = scoresBySubject[sa.subject_id] || { interrogation: [], devoir: [], composition: [] }
+          const norm = (s) => (s.is_absent || s.score === null) ? null : parseFloat((s.score / s.max_score * 20).toFixed(2))
+          const validInterros = ss.interrogation.filter(i => !i.is_absent && i.score !== null)
+          const interro_avg = validInterros.length > 0
+            ? parseFloat((validInterros.reduce((acc, i) => acc + i.score / i.max_score * 20, 0) / validInterros.length).toFixed(2))
+            : null
+          return {
+            name: sa.subject_name,
+            short_code: sa.short_code,
+            interro_avg,
+            devoirs: ss.devoir.map(norm),
+            compositions: ss.composition.map(norm),
+            raw_average: sa.raw_average,
+            coefficient: sa.coefficient,
+            weighted_average: sa.weighted_average,
+            rank: sa.subject_rank,
+            class_highest: sa.class_highest_score,
+            class_lowest: sa.class_lowest_score,
+            appreciation: getAppreciation(sa.raw_average),
+          }
+        }),
         totals: { total_coefficients: totalCoef, total_weighted_points: totalMoyCoef },
         summary: summary ? {
           semester_average: summary.semester_average,
@@ -169,12 +277,13 @@ router.post('/generate', requirePermission('reports.edit'), (req, res) => {
           conduite_score: decision.conduite_score,
           avertissement: decision.avertissement === 1,
           blame: decision.blame === 1,
-          exclusion_temporaire: decision.exclusion_temporaire === 1,
           felicitation: decision.felicitation === 1,
           encouragement: decision.encouragement === 1,
           tableau_honneur: decision.tableau_honneur === 1,
+          conduite_score: decision.conduite_score ?? defaultConduite,
           conseil_decision: decision.conseil_decision,
-        } : null,
+          conseil_decision_pass: decision.conseil_decision_pass === 1,
+        } : { conduite_score: defaultConduite },
       }
 
       db.prepare(`

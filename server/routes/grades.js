@@ -28,9 +28,9 @@ function getClassroomSubjects(db, classroomId) {
   const classroom = db.prepare('SELECT level_id, serie_id FROM classrooms WHERE id = ?').get(classroomId)
   if (!classroom) return []
   return classroom.serie_id
-    ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+    ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name, ls.coefficient FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
          WHERE ls.level_id = ? AND ls.is_active = 1 AND (ls.serie_id = ? OR ls.serie_id IS NULL) ORDER BY s.name`).all(classroom.level_id, classroom.serie_id)
-    : db.prepare(`SELECT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+    : db.prepare(`SELECT ls.subject_id, s.name AS subject_name, ls.coefficient FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
          WHERE ls.level_id = ? AND ls.is_active = 1 AND ls.serie_id IS NULL ORDER BY s.name`).all(classroom.level_id)
 }
 
@@ -131,7 +131,8 @@ router.get('/selectors', requirePermission('grades.view'), (req, res) => {
     ORDER BY l.display_order, c.label
   `).all(yearId || 0)
 
-  return res.json({ classrooms, periode_count: periodeCount, academic_year_id: yearId })
+  const periodeType = db.prepare("SELECT value FROM app_settings WHERE key = 'periode_type'").get()?.value || 'trimestre'
+  return res.json({ classrooms, periode_count: periodeCount, periode_type: periodeType, academic_year_id: yearId })
 })
 
 // ─── GET /api/grades/subjects/:classroomId — Subjects for a classroom ─
@@ -715,6 +716,132 @@ router.get('/dashboard/stats', requirePermission('students.view'), (req, res) =>
     semesters,
     recent_bulletins: recentBulletins,
   })
+})
+
+// ─── GET /api/grades/verification-pdf ───────────────────────────────────────
+// Returns all grade data grouped by classroom → subject, ready for PDF rendering.
+router.get('/verification-pdf', requirePermission('grades.view'), (req, res) => {
+  const db = getDb()
+  const yearId = db.prepare("SELECT value FROM app_settings WHERE key = 'current_academic_year_id'").get()?.value
+  const yearLabel = yearId ? db.prepare('SELECT label FROM academic_years WHERE id = ?').get(yearId)?.label : ''
+  const semester = parseInt(req.query.semester) || 1
+  const classroomIds = (req.query.classroom_ids || '').split(',').map(id => parseInt(id)).filter(Boolean)
+  if (!classroomIds.length) return res.status(400).json({ error: 'NO_CLASSROOMS' })
+
+  const TYPE_ABBR = { interrogation: 'Int.', devoir: 'Dev.', composition: 'Comp.', tp: 'TP', oral: 'Oral' }
+
+  const classrooms = db.prepare(`
+    SELECT c.id, c.label, c.level_id, c.serie_id FROM classrooms c JOIN levels l ON l.id = c.level_id
+    WHERE c.id IN (${classroomIds.map(() => '?').join(',')}) AND c.is_deleted = 0
+    ORDER BY l.display_order, c.label
+  `).all(...classroomIds)
+
+  const result = []
+
+  for (const classroom of classrooms) {
+    const subjects = getClassroomSubjects(db, classroom.id)
+
+    const students = db.prepare(`
+      SELECT s.id AS student_id, s.full_name FROM students s
+      JOIN enrollments e ON e.student_id = s.id AND e.classroom_id = ? AND e.is_deleted = 0
+      WHERE s.is_deleted = 0 ORDER BY s.full_name
+    `).all(classroom.id)
+    if (!students.length) continue
+
+    // One query for all templates of this class+semester
+    const allTemplates = db.prepare(`
+      SELECT id, subject_id, assessment_type, sequence_number, max_score, weight
+      FROM assessment_templates
+      WHERE classroom_id = ? AND academic_year_id = ? AND semester = ?
+      ORDER BY subject_id,
+        CASE assessment_type WHEN 'interrogation' THEN 1 WHEN 'devoir' THEN 2 WHEN 'composition' THEN 3 WHEN 'tp' THEN 4 WHEN 'oral' THEN 5 END,
+        sequence_number
+    `).all(classroom.id, yearId, semester)
+
+    const templatesBySubject = {}
+    for (const t of allTemplates) {
+      if (!templatesBySubject[t.subject_id]) templatesBySubject[t.subject_id] = []
+      templatesBySubject[t.subject_id].push(t)
+    }
+
+    // One query for all scores of those templates
+    const scoreMap = {}
+    if (allTemplates.length) {
+      const allScores = db.prepare(`
+        SELECT template_id, student_id, score, is_absent FROM assessment_scores
+        WHERE template_id IN (${allTemplates.map(() => '?').join(',')}) AND is_deleted = 0
+      `).all(...allTemplates.map(t => t.id))
+      for (const s of allScores) scoreMap[`${s.template_id}_${s.student_id}`] = s
+    }
+
+    const classroomSubjects = []
+
+    for (const subj of subjects) {
+      const templates = templatesBySubject[subj.subject_id] || []
+      if (!templates.length) continue
+
+      const columns = templates.map(t => ({
+        id: t.id,
+        label: `${TYPE_ABBR[t.assessment_type] || t.assessment_type}${t.sequence_number}`,
+        max_score: t.max_score,
+      }))
+
+      const studentRows = students.map(st => {
+        const scores = templates.map(t => {
+          const sc = scoreMap[`${t.id}_${st.student_id}`]
+          if (!sc) return null
+          if (sc.is_absent === 1) return 'ABS'
+          return sc.score !== null ? sc.score : null
+        })
+
+        // Same weighted-average formula as /compute
+        const byType = {}
+        for (const t of templates) {
+          const sc = scoreMap[`${t.id}_${st.student_id}`]
+          if (!byType[t.assessment_type]) byType[t.assessment_type] = { total: 0, count: 0, weight: t.weight, max: t.max_score }
+          if (sc && sc.score !== null && sc.is_absent !== 1) {
+            byType[t.assessment_type].total += sc.score
+            byType[t.assessment_type].count++
+          }
+        }
+        let weightedSum = 0, weightTotal = 0
+        for (const data of Object.values(byType)) {
+          if (data.count > 0) {
+            const avg = (data.total / data.count) * (data.max === 20 ? 1 : 20 / data.max)
+            weightedSum += avg * data.weight
+            weightTotal += data.weight
+          }
+        }
+        const average = weightTotal > 0 ? parseFloat((weightedSum / weightTotal).toFixed(2)) : null
+        return { student_id: st.student_id, full_name: st.full_name, scores, average, rank: null, rank_ex: false }
+      })
+
+      // Rank by subject average
+      const withAvg = studentRows.filter(r => r.average !== null).sort((a, b) => b.average - a.average)
+      let rank = 1
+      for (let i = 0; i < withAvg.length; i++) {
+        if (i > 0 && withAvg[i].average < withAvg[i - 1].average) rank = i + 1
+        withAvg[i].rank = rank
+        withAvg[i].rank_ex = i > 0 && withAvg[i].average === withAvg[i - 1].average
+      }
+      const rankMap = {}
+      withAvg.forEach(r => { rankMap[r.student_id] = { rank: r.rank, ex: r.rank_ex } })
+      studentRows.forEach(r => { const rk = rankMap[r.student_id]; r.rank = rk?.rank || null; r.rank_ex = rk?.ex || false })
+
+      classroomSubjects.push({
+        subject_id: subj.subject_id,
+        subject_name: subj.subject_name,
+        coefficient: subj.coefficient,
+        teacher_name: getTeacherName(db, classroom.id, subj.subject_id, yearId),
+        columns,
+        students: studentRows,
+      })
+    }
+
+    if (classroomSubjects.length) result.push({ classroom: { id: classroom.id, label: classroom.label }, subjects: classroomSubjects })
+  }
+
+  return res.json({ semester, year_label: yearLabel, data: result })
 })
 
 module.exports = router

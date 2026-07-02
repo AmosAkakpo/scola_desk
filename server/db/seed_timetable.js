@@ -258,14 +258,15 @@ function levelWindow(code) {
   return           { start: 7, end: 19 }          // 2nde+: 7h-19h
 }
 
-const teacherBusy = new Set()
-const classBusy   = new Set()
+const teacherBusy  = new Set()
+const classBusy    = new Set()
+const classDayLoad = {}   // classId → { day → hoursAssigned }
 
 function key(id, day, h) { return `${id}|${day}|${h}` }
 
 function isFree(classId, teacherId, day, startH, span) {
   for (let i = 0; i < span; i++) {
-    if (classBusy.has(key(classId, day, startH + i)))   return false
+    if (classBusy.has(key(classId, day, startH + i)))     return false
     if (teacherBusy.has(key(teacherId, day, startH + i))) return false
   }
   return true
@@ -276,16 +277,19 @@ function markBusy(classId, teacherId, day, startH, span) {
     classBusy.add(key(classId, day, startH + i))
     teacherBusy.add(key(teacherId, day, startH + i))
   }
+  if (!classDayLoad[classId]) classDayLoad[classId] = {}
+  classDayLoad[classId][day] = (classDayLoad[classId][day] || 0) + span
 }
 
-// Find a free slot of `span` consecutive hours for class+teacher.
-// Tries each day Mon-Fri, each valid start hour in the level window.
-// Never spans across lunch (12:00).
+// Find a free slot of `span` hours. Sorts candidate days by how few hours
+// this class already has on each day, so slots spread evenly across Mon-Fri.
 function findSlot(classId, teacherId, levelCode, span) {
   const { start, end } = levelWindow(levelCode)
-  for (let day = 1; day <= 5; day++) {
+  const load = (d) => classDayLoad[classId]?.[d] || 0
+  const days = [1, 2, 3, 4, 5].sort((a, b) => load(a) - load(b))
+
+  for (const day of days) {
     for (let h = start; h + span <= end; h++) {
-      // Skip if block would cross lunch
       let crossesLunch = false
       for (let i = 0; i < span; i++) { if (h + i === 12) { crossesLunch = true; break } }
       if (crossesLunch) continue
@@ -330,8 +334,8 @@ for (const [label, subs] of Object.entries(ASSIGNMENTS)) {
 
   // Sort: EPS first (needs a 2h block, most constrained), then by hours desc
   const sorted = [...subs].sort((a, b) => {
-    if (a.sub === 'EPS') return -1
-    if (b.sub === 'EPS') return  1
+    if (a.sub === 'Éducation Physique et Sportive') return -1
+    if (b.sub === 'Éducation Physique et Sportive') return  1
     return b.h - a.h
   })
 

@@ -133,9 +133,9 @@ router.get('/:id/assignments', requirePermission('students.view'), (req, res) =>
   if (!classroom) return res.status(404).json({ error: 'NOT_FOUND' })
 
   const subjects = classroom.serie_id
-    ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+    ? db.prepare(`SELECT DISTINCT ls.subject_id, s.name AS subject_name, ls.coefficient FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
          WHERE ls.level_id = ? AND ls.is_active = 1 AND (ls.serie_id = ? OR ls.serie_id IS NULL) ORDER BY s.name`).all(classroom.level_id, classroom.serie_id)
-    : db.prepare(`SELECT ls.subject_id, s.name AS subject_name FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
+    : db.prepare(`SELECT ls.subject_id, s.name AS subject_name, ls.coefficient FROM level_subjects ls JOIN subjects s ON s.id = ls.subject_id
          WHERE ls.level_id = ? AND ls.is_active = 1 AND ls.serie_id IS NULL ORDER BY s.name`).all(classroom.level_id)
 
   const assignStmt = db.prepare('SELECT teacher_id FROM teacher_schedule WHERE classroom_id = ? AND subject_id = ? AND academic_year_id = ? LIMIT 1')

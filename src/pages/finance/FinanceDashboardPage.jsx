@@ -48,7 +48,7 @@ export default function FinanceDashboardPage() {
         <div className="flex gap-2">
           <button onClick={() => navigate('/finance/tuition')} className="px-3 py-2 bg-brand hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-colors">Paiements scolarité</button>
           <button onClick={() => navigate('/finance/expenses')} className="px-3 py-2 bg-white border border-steel-200 text-steel-700 hover:bg-steel-50 rounded-lg text-sm font-medium transition-colors">Dépenses</button>
-          <button onClick={() => navigate('/finance/subscription')} className="px-3 py-2 bg-white border border-steel-200 text-steel-700 hover:bg-steel-50 rounded-lg text-sm font-medium transition-colors">Mon abonnement</button>
+<button onClick={() => navigate('/finance/subscription')} className="px-3 py-2 bg-white border border-steel-200 text-steel-700 hover:bg-steel-50 rounded-lg text-sm font-medium transition-colors">Mon abonnement</button>
         </div>
       </div>
 

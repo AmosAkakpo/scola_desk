@@ -31,6 +31,16 @@ export default function StudentDetailPage() {
   const [editForm, setEditForm] = useState({})
   const [showTransfer, setShowTransfer] = useState(false)
   const [showAddGuardian, setShowAddGuardian] = useState(false)
+  const [sanctionSem, setSanctionSem] = useState(1)
+  const [sanctions, setSanctions] = useState(null)
+  const [sanctionSaving, setSanctionSaving] = useState(false)
+  const [showExpelConfirm, setShowExpelConfirm] = useState(false)
+  const [expelMatriculeInput, setExpelMatriculeInput] = useState('')
+  const [defaultConduite, setDefaultConduite] = useState(18)
+  const [conduiteScore, setConduiteScore] = useState(18)
+  const [conduiteNote, setConduiteNote] = useState('')
+  const [showConduiteConfirm, setShowConduiteConfirm] = useState(false)
+  const [conduiteSaving, setConduiteSaving] = useState(false)
 
   async function fetchData() {
     const res = await api.get(`/api/students/${id}`)
@@ -55,11 +65,49 @@ export default function StudentDetailPage() {
     fetchData()
   }
 
+  async function loadSanctions(sem) {
+    const res = await api.get(`/api/students/${id}/sanctions/${sem}`)
+    setSanctions(res.data.sanctions)
+    const defC = res.data.default_conduite ?? 18
+    setDefaultConduite(defC)
+    setConduiteScore(res.data.sanctions?.conduite_score ?? defC)
+    setConduiteNote(res.data.sanctions?.conduite_note ?? '')
+  }
+
+  useEffect(() => { if (!loading) loadSanctions(sanctionSem) }, [loading, sanctionSem, id])
+
+  async function saveSanctions() {
+    setSanctionSaving(true)
+    await api.put(`/api/students/${id}/sanctions/${sanctionSem}`, { avertissement: sanctions?.avertissement, blame: sanctions?.blame })
+    setSanctionSaving(false)
+    loadSanctions(sanctionSem)
+  }
+
+  async function saveConduite() {
+    setConduiteSaving(true)
+    setShowConduiteConfirm(false)
+    await api.put(`/api/students/${id}/sanctions/${sanctionSem}`, {
+      avertissement: sanctions?.avertissement,
+      blame: sanctions?.blame,
+      conduite_score: conduiteScore,
+      conduite_note: conduiteNote || null,
+    })
+    setConduiteSaving(false)
+    loadSanctions(sanctionSem)
+  }
+
+  async function confirmExpel() {
+    await api.post(`/api/students/${id}/expel`)
+    setShowExpelConfirm(false)
+    setExpelMatriculeInput('')
+    fetchData()
+  }
+
   if (loading) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-2 border-brand border-t-transparent rounded-full animate-spin" /></div>
   if (!student) return <p className="text-steel-500 py-20 text-center">Élève introuvable</p>
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -198,8 +246,159 @@ export default function StudentDetailPage() {
         )}
       </section>
 
+      {/* Sanctions & Décisions */}
+      <section className="bg-white rounded-xl border border-steel-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xs font-semibold text-steel-400 uppercase tracking-wide">Sanctions & Décisions</h2>
+          {enrollment && student.status !== 'excluded' && (
+            <button onClick={() => setShowExpelConfirm(true)}
+              className="px-3 py-1.5 border border-red-200 text-red-500 rounded-lg text-xs font-medium hover:bg-red-50 transition-colors">
+              Expulser l'élève
+            </button>
+          )}
+        </div>
+
+        {!enrollment ? (
+          <p className="text-sm text-steel-400">Élève non inscrit cette année scolaire.</p>
+        ) : student.status === 'excluded' ? (
+          <div className="flex items-center gap-2 px-4 py-3 bg-red-50 rounded-lg">
+            <span className="text-red-500 text-sm font-medium">Élève expulsé</span>
+            <span className="text-xs text-red-400">— Ne compte plus dans les effectifs ni les classements</span>
+          </div>
+        ) : (
+          <>
+            {/* Semester tabs */}
+            <div className="flex gap-1 mb-5">
+              {[1, 2, 3].map(s => (
+                <button key={s} onClick={() => setSanctionSem(s)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${sanctionSem === s ? 'bg-brand text-white' : 'border border-steel-200 text-steel-500 hover:bg-steel-50'}`}>
+                  Trimestre {s}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              {/* Sanctions (manual) */}
+              <div>
+                <p className="text-xs font-medium text-steel-600 mb-3">Sanctions <span className="text-steel-400 font-normal">(saisie manuelle)</span></p>
+                <div className="space-y-3">
+                  {[['avertissement', 'Avertissement'], ['blame', 'Blâme']].map(([key, label]) => (
+                    <label key={key} className="flex items-center justify-between cursor-pointer">
+                      <span className="text-sm text-steel-700">{label}</span>
+                      <button onClick={() => setSanctions(p => ({ ...p, [key]: p?.[key] ? 0 : 1 }))}
+                        className={`w-10 h-6 rounded-full transition-colors relative flex-shrink-0 ${sanctions?.[key] ? 'bg-red-500' : 'bg-steel-200'}`}>
+                        <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${sanctions?.[key] ? 'left-5' : 'left-1'}`} />
+                      </button>
+                    </label>
+                  ))}
+                </div>
+                <button onClick={saveSanctions} disabled={sanctionSaving}
+                  className="mt-4 px-4 py-1.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors">
+                  {sanctionSaving ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
+
+              {/* Auto-computed (read-only) */}
+              <div>
+                <p className="text-xs font-medium text-steel-600 mb-3">Félicitations <span className="text-steel-400 font-normal">(calculées automatiquement)</span></p>
+                <div className="space-y-2">
+                  {[['encouragement', 'Encouragement'], ['felicitation', 'Félicitation'], ['tableau_honneur', "Tableau d'honneur"]].map(([key, label]) => (
+                    <div key={key} className="flex items-center justify-between">
+                      <span className="text-sm text-steel-700">{label}</span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${sanctions?.[key] ? 'bg-brand-50 text-brand-600' : 'bg-steel-100 text-steel-400'}`}>
+                        {sanctions?.[key] ? 'Oui' : 'Non'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {sanctions?.conseil_decision && (
+                  <div className="mt-4 p-3 bg-steel-50 rounded-lg">
+                    <p className="text-xs text-steel-500 mb-1">Décision du conseil</p>
+                    <p className={`text-sm font-medium ${sanctions.conseil_decision_pass ? 'text-brand-600' : 'text-red-500'}`}>
+                      {sanctions.conseil_decision}
+                    </p>
+                  </div>
+                )}
+                <p className="text-xs text-steel-400 mt-3">Régénérez les bulletins pour mettre à jour ces valeurs.</p>
+              </div>
+            </div>
+
+            {/* Conduite */}
+            <div className="mt-6 pt-6 border-t border-steel-100">
+              <p className="text-xs font-medium text-steel-600 mb-3">
+                Conduite <span className="text-steel-400 font-normal">(par défaut: {defaultConduite}/20)</span>
+              </p>
+              <div className="flex items-start gap-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <input type="number" min="0" max="20" step="0.5" value={conduiteScore}
+                    onChange={e => setConduiteScore(parseFloat(e.target.value) || 0)}
+                    className="w-20 px-3 py-1.5 border border-steel-200 rounded-lg text-sm text-center focus:outline-none focus:border-brand" />
+                  <span className="text-sm text-steel-500">/ 20</span>
+                </div>
+                <div className="flex-1 min-w-48">
+                  <textarea value={conduiteNote} onChange={e => setConduiteNote(e.target.value)} rows={2}
+                    placeholder="Note (optionnel) — raison de la modification..."
+                    className="w-full px-3 py-2 border border-steel-200 rounded-lg text-xs resize-none focus:outline-none focus:border-brand" />
+                </div>
+                <button onClick={() => setShowConduiteConfirm(true)} disabled={conduiteSaving}
+                  className="px-4 py-1.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors">
+                  {conduiteSaving ? 'Enregistrement...' : 'Enregistrer la conduite'}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* Conduite Confirmation Modal */}
+      {showConduiteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-medium text-steel-900 mb-1">Modifier la conduite</h2>
+            <p className="text-sm text-steel-500 mb-4">Confirmer la modification de la note de conduite pour le Trimestre {sanctionSem}.</p>
+            <div className="bg-steel-50 rounded-lg px-4 py-3 mb-5 space-y-1">
+              <p className="font-medium text-steel-800">{student.full_name}</p>
+              <p className="text-xs text-steel-500">Conduite: <strong>{conduiteScore}/20</strong></p>
+              {conduiteNote && <p className="text-xs text-steel-500 italic">Note: {conduiteNote}</p>}
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setShowConduiteConfirm(false)} className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Annuler</button>
+              <button onClick={saveConduite} className="flex-1 py-2.5 bg-brand hover:bg-brand-600 text-white rounded-lg text-sm font-medium">Confirmer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Expel Confirmation Modal */}
+      {showExpelConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 className="text-base font-medium text-steel-900 mb-1">Expulser l'élève</h2>
+            <p className="text-sm text-steel-500 mb-4">Cette action est définitive pour cette année scolaire. Pour confirmer, saisissez le matricule de l'élève.</p>
+            <div className="bg-red-50 rounded-lg px-4 py-3 mb-4">
+              <p className="font-medium text-steel-800">{student.full_name}</p>
+              <p className="text-xs text-steel-500 mt-0.5">{enrollment?.classroom_label}</p>
+              <p className="text-xs font-mono text-steel-600 mt-1">Matricule: <strong>{student.matricule || '—'}</strong></p>
+              <p className="text-xs text-red-500 mt-2">Ne comptera plus dans les effectifs ni les classements.</p>
+            </div>
+            <input type="text" value={expelMatriculeInput} onChange={e => setExpelMatriculeInput(e.target.value)}
+              placeholder={`Saisir le matricule pour confirmer`}
+              className="w-full px-3 py-2 border border-steel-300 rounded-lg text-sm font-mono focus:outline-none focus:border-red-400 mb-4" />
+            <div className="flex gap-3">
+              <button onClick={() => { setShowExpelConfirm(false); setExpelMatriculeInput('') }}
+                className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Annuler</button>
+              <button onClick={confirmExpel}
+                disabled={expelMatriculeInput.trim() !== (student.matricule || '').trim()}
+                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors">
+                Confirmer l'expulsion
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Transfer Modal */}
-      {showTransfer && <TransferModal studentId={id} currentClassroom={enrollment?.classroom_id} onClose={() => setShowTransfer(false)} onDone={() => { setShowTransfer(false); fetchData() }} />}
+      {showTransfer && <TransferModal studentId={id} student={student} enrollment={enrollment} onClose={() => setShowTransfer(false)} onDone={() => { setShowTransfer(false); fetchData() }} />}
 
       {/* Add Guardian Modal */}
       {showAddGuardian && <AddGuardianModal studentId={id} onClose={() => setShowAddGuardian(false)} onDone={() => { setShowAddGuardian(false); fetchData() }} />}
@@ -207,43 +406,100 @@ export default function StudentDetailPage() {
   )
 }
 
-function TransferModal({ studentId, currentClassroom, onClose, onDone }) {
+function TransferModal({ studentId, student, enrollment, onClose, onDone }) {
   const [classrooms, setClassrooms] = useState([])
   const [target, setTarget] = useState('')
+  const [step, setStep] = useState(1)
+  const [matriculeInput, setMatriculeInput] = useState('')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     api.get('/api/classrooms').then(r => {
-      const list = (r.data.classrooms || []).filter(c => c.id !== currentClassroom)
+      const list = (r.data.classrooms || []).filter(c => c.id !== enrollment?.classroom_id)
       setClassrooms(list)
-      if (list.length > 0) setTarget(list[0].id)
+      if (list.length > 0) setTarget(String(list[0].id))
     })
-  }, [currentClassroom])
+  }, [enrollment?.classroom_id])
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    if (!target) return
-    setSaving(true)
-    await api.post(`/api/students/${studentId}/transfer`, { classroom_id: parseInt(target) })
-    onDone()
+  const targetLabel = classrooms.find(c => String(c.id) === String(target))?.label || '—'
+  const matriculeMatch = matriculeInput.trim().toLowerCase() === (student?.matricule || '').toLowerCase()
+
+  async function confirm() {
+    setSaving(true); setError('')
+    try {
+      await api.post(`/api/students/${studentId}/transfer`, { classroom_id: parseInt(target) })
+      onDone()
+    } catch (err) {
+      setError(err.response?.data?.message || 'Erreur lors du transfert')
+      setSaving(false)
+    }
   }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-        <h2 className="text-lg font-medium text-steel-900 mb-4">Changer de classe</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <select value={target} onChange={e => setTarget(e.target.value)}
-            className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand bg-white">
-            {classrooms.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-          </select>
-          <div className="flex gap-3">
-            <button type="button" onClick={onClose} className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Annuler</button>
-            <button type="submit" disabled={saving || !target} className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium">
-              {saving ? 'Transfert...' : 'Transférer'}
-            </button>
-          </div>
-        </form>
+        {step === 1 ? (
+          <>
+            <h2 className="text-base font-medium text-steel-900 mb-1">Changer de classe</h2>
+            <p className="text-xs text-steel-500 mb-4">{student?.full_name}</p>
+            <div className="mb-4">
+              <label className="block text-xs text-steel-500 mb-1">Nouvelle classe</label>
+              <select value={target} onChange={e => setTarget(e.target.value)}
+                className="w-full px-3 py-2 border border-steel-200 rounded-lg text-sm focus:outline-none focus:border-brand bg-white">
+                {classrooms.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={onClose} className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">Annuler</button>
+              <button onClick={() => setStep(2)} disabled={!target}
+                className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
+                Continuer
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="text-base font-medium text-steel-900 mb-1">Confirmer le transfert</h2>
+            <div className="bg-steel-50 rounded-lg px-4 py-3 my-4 text-sm text-steel-700">
+              <p className="font-medium mb-1">{student?.full_name}</p>
+              <p className="text-xs text-steel-500">
+                {enrollment?.classroom_label || '—'}
+                <span className="mx-2 text-steel-400">→</span>
+                <span className="font-medium text-steel-700">{targetLabel}</span>
+              </p>
+            </div>
+            <div className="mb-4">
+              <label className="block text-xs text-steel-500 mb-1">
+                Entrez le matricule pour confirmer — <span className="font-bold text-steel-800 select-all">{student?.matricule || '—'}</span>
+              </label>
+              <input
+                type="text"
+                value={matriculeInput}
+                onChange={e => setMatriculeInput(e.target.value)}
+                placeholder={student?.matricule || 'Matricule'}
+                className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none transition-colors ${
+                  matriculeInput && !matriculeMatch ? 'border-red-300 focus:border-red-400' :
+                  matriculeMatch ? 'border-brand focus:border-brand' : 'border-steel-200 focus:border-brand'
+                }`}
+              />
+              {matriculeInput && !matriculeMatch && (
+                <p className="text-xs text-red-500 mt-1">Matricule incorrect</p>
+              )}
+            </div>
+            {error && <p className="text-red-500 text-xs mb-3">{error}</p>}
+            <div className="flex gap-3">
+              <button onClick={() => { setStep(1); setMatriculeInput('') }}
+                className="flex-1 py-2.5 border border-steel-200 text-steel-600 rounded-lg text-sm font-medium hover:bg-steel-50">
+                Retour
+              </button>
+              <button onClick={confirm} disabled={saving || !matriculeMatch}
+                className="flex-1 py-2.5 bg-brand hover:bg-brand-600 disabled:opacity-40 text-white rounded-lg text-sm font-medium">
+                {saving ? 'Transfert...' : 'Confirmer'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

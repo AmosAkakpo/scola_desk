@@ -86,6 +86,14 @@ function runMigrations() {
         {
             version: '009_finance_module',
             run: require('./migration/009_finance_module').migration009
+        },
+        {
+            version: '010_expulsion_conseil',
+            run: require('./migration/010_expulsion_conseil').migration010
+        },
+        {
+            version: '011_conduite_note',
+            run: require('./migration/011_conduite_note').migration011
         }
     ]
 
